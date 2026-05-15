@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ForestGuard Pro v2 – Validador Ambiental</title>
+    <meta name="description" content="Detecta inconsistencias en informes ambientales y forestales.">
+    <link rel="stylesheet" href="styles.css?v=2.1">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+<div class="wrap">
+
+    <!-- Header -->
+    <div class="header">
+        <div class="logo-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+        </div>
+        <div>
+            <h1>ForestGuard <span>Pro</span></h1>
+            <p>Validador automático de informes ambientales y forestales</p>
+        </div>
+        <button id="btnDebug" onclick="toggleDebugModal()" style="display:none; margin-left:auto; background:var(--gray); color:white; border:none; padding:8px 12px; border-radius:6px; cursor:pointer; font-size:0.8rem; font-weight:600;">Ver Texto Original</button>
+    </div>
+
+    <!-- Drop Zone -->
+    <div class="drop-zone" id="dropZone">
+        <input type="file" id="fileInput" multiple accept=".pdf,.doc,.docx,.xls,.xlsx" hidden>
+        <div class="drop-zone-icon">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+        </div>
+        <h3>Arrastra los documentos aquí</h3>
+        <p>PDF · Word (.docx) · Excel (.xlsx) — puedes subir varios a la vez</p>
+        <button class="btn-primary" onclick="document.getElementById('fileInput').click()">Seleccionar archivos</button>
+        <div class="file-list" id="fileList"></div>
+    </div>
+
+    <button class="btn-analyze" id="analyzeBtn" disabled>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        Analizar documentos
+    </button>
+
+    <!-- Loader -->
+    <div class="loader" id="loader">
+        <div class="spinner"></div>
+        <p>Extrayendo y comparando datos…</p>
+    </div>
+
+    <!-- Results -->
+    <div class="results" id="results">
+        <div id="statusBanner"></div>
+
+        <!-- Comparison table -->
+        <div class="card">
+            <div class="section-label">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></svg>
+                Datos extraídos por documento
+            </div>
+            <div class="table-wrap">
+                <table class="cmp-table">
+                    <thead id="cmpHead"></thead>
+                    <tbody id="cmpBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Inconsistency cards -->
+        <div id="incSection" style="display:none">
+            <div class="card">
+                <div class="section-label">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    Inconsistencias detectadas
+                </div>
+                <div class="inc-grid" id="incList"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Debug Text -->
+    <div id="debugModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:999; align-items:center; justify-content:center; padding:2rem;">
+        <div style="background:white; width:100%; max-width:900px; height:80vh; border-radius:12px; display:flex; flex-direction:column; overflow:hidden;">
+            <div style="padding:1rem 1.5rem; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center;">
+                <h3 style="margin:0;">Texto crudo leído por el motor</h3>
+                <button onclick="toggleDebugModal()" style="background:none; border:none; font-size:1.5rem; cursor:pointer;">&times;</button>
+            </div>
+            <div style="display:flex; flex:1; overflow:hidden;">
+                <div id="debugFileList" style="width:250px; border-right:1px solid #e2e8f0; overflow-y:auto; padding:1rem; background:#f8fafc;"></div>
+                <div style="flex:1; background:#f8fafc; overflow-y:auto;" id="debugTextContent">Selecciona un archivo para ver su texto original.</div>
+            </div>
+        </div>
+    </div>
+
+</div>
+<script src="app.js?v=2.1"></script>
+</body>
+</html>
