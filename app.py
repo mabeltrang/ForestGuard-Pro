@@ -167,23 +167,58 @@ with st.sidebar:
 uploaded_files = st.file_uploader("Sube todos los documentos del paquete forestal aquí", accept_multiple_files=True, type=['pdf', 'docx', 'doc', 'xlsx', 'xls'])
 
 if st.button("🚀 Iniciar Análisis Experto", type="primary"):
+    # Verificar API Key
     if not api_key:
         st.error("No se puede iniciar el análisis sin una API Key válida.")
         st.stop()
-    
+    # Verificar archivos cargados
     if not uploaded_files:
         st.error("Por favor, sube al menos un documento para analizar.")
         st.stop()
-        
+    # Configurar Gemini y crear modelo Flash
     try:
         genai.configure(api_key=api_key)
-        # Usar el modelo Pro para tareas complejas
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        model = genai.GenerativeModel('gemini-1.5-flash')
     except Exception as e:
         st.error(f"Error configurando la API: {str(e)}")
         st.stop()
-
     # Procesar archivos
+    os.makedirs("temp", exist_ok=True)
+    with st.status("Analizando documentos...", expanded=True) as status:
+        document_texts = []
+        st.write("1️⃣ Extrayendo texto de los documentos...")
+        for file in uploaded_files:
+            temp_path = os.path.join("temp", file.name)
+            with open(temp_path, "wb") as f:
+                f.write(file.getbuffer())
+            try:
+                extracted_text = extract_text_from_file(temp_path)
+                document_texts.append(f"\n=======================\nDOCUMENTO: {file.name}\n=======================\n{extracted_text}")
+                st.write(f"- ✔️ Extraído: {file.name}")
+            except Exception as e:
+                st.write(f"- ❌ Error extrayendo {file.name}: {str(e)}")
+            finally:
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+        all_text_combined = "\n".join(document_texts)
+        st.write("2️⃣ Ejecutando el Auditor Técnico de IA (Gemini 1.5 Flash)...")
+        with st.expander("Ver Texto Original Extraído (Debug)"):
+            st.text(all_text_combined)
+        try:
+            full_prompt = f"{SYSTEM_PROMPT}\n\nAquí tienes el contenido de los documentos extraídos para analizar:\n\n{all_text_combined}"
+            response = model.generate_content(full_prompt)
+            status.update(label="Análisis completado", state="complete", expanded=False)
+            st.divider()
+            st.header("📊 Resultados del Análisis")
+            st.markdown(response.text)
+        except Exception as e:
+            status.update(label="Error en el análisis", state="error")
+            st.error(f"Error comunicándose con Gemini: {str(e)}")
+
+# Duplicate processing block removed – flash block already handles processing
+
     os.makedirs("temp", exist_ok=True)
     
     with st.status("Analizando documentos...", expanded=True) as status:
