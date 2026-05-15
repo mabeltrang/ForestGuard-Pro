@@ -1,5 +1,5 @@
 streamlit
-google-generativeai
+google-genai>=0.8.0
 python-multipart
 PyPDF2
 python-docx
