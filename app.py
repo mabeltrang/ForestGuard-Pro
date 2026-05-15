@@ -1,6 +1,6 @@
 import streamlit as st
 import os
-import google.generativeai as genai
+from google import genai
 from extractor import extract_text_from_file
 
 # --- Configuración de la página ---
@@ -140,8 +140,7 @@ st.markdown("Validador avanzado de informes ambientales impulsado por **Google G
 # Configuración API Key en Sidebar
 with st.sidebar:
     st.header("Configuración")
-    
-    # Intentar leer desde secrets primero (para Streamlit Cloud)
+
     api_key = ""
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
@@ -164,28 +163,34 @@ with st.sidebar:
     """)
 
 # Zona de carga de archivos
-uploaded_files = st.file_uploader("Sube todos los documentos del paquete forestal aquí", accept_multiple_files=True, type=['pdf', 'docx', 'doc', 'xlsx', 'xls'])
+uploaded_files = st.file_uploader(
+    "Sube todos los documentos del paquete forestal aquí",
+    accept_multiple_files=True,
+    type=['pdf', 'docx', 'doc', 'xlsx', 'xls']
+)
 
 if st.button("🚀 Iniciar Análisis Experto", type="primary"):
-    # Verificar API Key
+
     if not api_key:
         st.error("No se puede iniciar el análisis sin una API Key válida.")
         st.stop()
-    # Verificar archivos cargados
+
     if not uploaded_files:
         st.error("Por favor, sube al menos un documento para analizar.")
         st.stop()
-    # Configurar Gemini y crear modelo Flash
+
+    # Inicializar cliente con la nueva librería
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        client = genai.Client(api_key=api_key)
     except Exception as e:
         st.error(f"Error configurando la API: {str(e)}")
         st.stop()
-    # Procesar archivos
+
     os.makedirs("temp", exist_ok=True)
+
     with st.status("Analizando documentos...", expanded=True) as status:
         document_texts = []
+
         st.write("1️⃣ Extrayendo texto de los documentos...")
         for file in uploaded_files:
             temp_path = os.path.join("temp", file.name)
@@ -193,7 +198,9 @@ if st.button("🚀 Iniciar Análisis Experto", type="primary"):
                 f.write(file.getbuffer())
             try:
                 extracted_text = extract_text_from_file(temp_path)
-                document_texts.append(f"\n=======================\nDOCUMENTO: {file.name}\n=======================\n{extracted_text}")
+                document_texts.append(
+                    f"\n=======================\nDOCUMENTO: {file.name}\n=======================\n{extracted_text}"
+                )
                 st.write(f"- ✔️ Extraído: {file.name}")
             except Exception as e:
                 st.write(f"- ❌ Error extrayendo {file.name}: {str(e)}")
@@ -202,66 +209,32 @@ if st.button("🚀 Iniciar Análisis Experto", type="primary"):
                     os.remove(temp_path)
                 except Exception:
                     pass
-        all_text_combined = "\n".join(document_texts)
-        st.write("2️⃣ Ejecutando el Auditor Técnico de IA (Gemini 1.5 Flash)...")
-        with st.expander("Ver Texto Original Extraído (Debug)"):
-            st.text(all_text_combined)
-        try:
-            full_prompt = f"{SYSTEM_PROMPT}\n\nAquí tienes el contenido de los documentos extraídos para analizar:\n\n{all_text_combined}"
-            response = model.generate_content(full_prompt)
-            status.update(label="Análisis completado", state="complete", expanded=False)
-            st.divider()
-            st.header("📊 Resultados del Análisis")
-            st.markdown(response.text)
-        except Exception as e:
-            status.update(label="Error en el análisis", state="error")
-            st.error(f"Error comunicándose con Gemini: {str(e)}")
 
-# Duplicate processing block removed – flash block already handles processing
-
-    os.makedirs("temp", exist_ok=True)
-    
-    with st.status("Analizando documentos...", expanded=True) as status:
-        document_texts = []
-        
-        st.write("1️⃣ Extrayendo texto de los documentos...")
-        for file in uploaded_files:
-            temp_path = os.path.join("temp", file.name)
-            with open(temp_path, "wb") as f:
-                f.write(file.getbuffer())
-                
-            try:
-                extracted_text = extract_text_from_file(temp_path)
-                document_texts.append(f"\n=======================\nDOCUMENTO: {file.name}\n=======================\n{extracted_text}")
-                st.write(f"- ✔️ Extraído: {file.name}")
-            except Exception as e:
-                st.write(f"- ❌ Error extrayendo {file.name}: {str(e)}")
-            finally:
-                # Limpiar temporal
-                try:
-                    os.remove(temp_path)
-                except:
-                    pass
-        
         all_text_combined = "\n".join(document_texts)
-        
-        st.write("2️⃣ Ejecutando el Auditor Técnico de IA (Gemini 1.5 Pro)...")
-        # Mostrar el texto original en un expander
+
+        st.write("2️⃣ Ejecutando el Auditor Técnico de IA (Gemini 2.0 Flash)...")
+
         with st.expander("Ver Texto Original Extraído (Debug)"):
             st.text(all_text_combined)
 
         try:
-            full_prompt = f"{SYSTEM_PROMPT}\n\nAquí tienes el contenido de los documentos extraídos para analizar:\n\n{all_text_combined}"
-            
-            response = model.generate_content(full_prompt)
-            
+            full_prompt = (
+                f"{SYSTEM_PROMPT}\n\n"
+                f"Aquí tienes el contenido de los documentos extraídos para analizar:\n\n"
+                f"{all_text_combined}"
+            )
+
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=full_prompt
+            )
+
             status.update(label="Análisis completado", state="complete", expanded=False)
-            
-            # Mostrar Resultados
+
             st.divider()
             st.header("📊 Resultados del Análisis")
             st.markdown(response.text)
-            
+
         except Exception as e:
             status.update(label="Error en el análisis", state="error")
             st.error(f"Error comunicándose con Gemini: {str(e)}")
