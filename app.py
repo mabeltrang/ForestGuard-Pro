@@ -178,7 +178,7 @@ if st.button("🚀 Iniciar Análisis Experto", type="primary"):
     try:
         genai.configure(api_key=api_key)
         # Usar el modelo Pro para tareas complejas
-        model = genai.GenerativeModel('gemini-1.5-pro')
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
     except Exception as e:
         st.error(f"Error configurando la API: {str(e)}")
         st.stop()
