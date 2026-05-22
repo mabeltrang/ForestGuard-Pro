@@ -3,7 +3,7 @@ import os
 import tempfile
 from extractor import extract_text_from_file
 from analyzer import clasificar_documento, extraer_fun, extraer_informe_af, \
-    extraer_aptitud_suelo, extraer_costos, extraer_oficio, analizar_paquete
+    extraer_compensacion, extraer_aptitud_suelo, extraer_costos, extraer_oficio, analizar_paquete
 
 # ---------------------------------------------------------------------------
 # CONFIGURACIÓN
@@ -17,6 +17,7 @@ st.set_page_config(
 EXTRACTORES = {
     "FUN": extraer_fun,
     "INFORME_AF": extraer_informe_af,
+    "COMPENSACION": extraer_compensacion,
     "APTITUD": extraer_aptitud_suelo,
     "COSTOS": extraer_costos,
     "OFICIO": extraer_oficio,
@@ -25,7 +26,8 @@ EXTRACTORES = {
 LABELS = {
     "FUN": "📋 FUN",
     "INFORME_AF": "🌳 Informe AF",
-    "APTITUD": "🌱 Aptitud Suelo",
+    "COMPENSACION": "🌱 Plan Compensación",
+    "APTITUD": "🗺️ Aptitud Suelo",
     "COSTOS": "💰 Costos",
     "OFICIO": "📄 Oficio",
     "DESCONOCIDO": "❓ Desconocido",
@@ -48,6 +50,7 @@ with st.sidebar:
     **Documentos soportados:**
     - Formato Único Nacional (FUN)
     - Informe de Aprovechamiento Forestal
+    - Plan de Compensación *(separado o dentro del AF)*
     - Informe de Aptitud del Suelo
     - Costos y Presupuesto
     - Oficio de Solicitud
@@ -100,7 +103,7 @@ for file in uploaded_files:
             os.remove(tmp_path)
 
 # Clasificación con corrección manual
-tipo_opciones = ["FUN", "INFORME_AF", "APTITUD", "COSTOS", "OFICIO", "DESCONOCIDO"]
+tipo_opciones = ["FUN", "INFORME_AF", "COMPENSACION", "APTITUD", "COSTOS", "OFICIO", "DESCONOCIDO"]
 asignaciones = {}
 
 cols = st.columns([3, 2])
@@ -157,7 +160,12 @@ if st.button("🔍 Validar Paquete", type="primary"):
 
     import pandas as pd
     df = pd.DataFrame(cotejo)
-    df = df.rename(columns={"dato": "Dato", "consistente": "¿Consistente?"})
+    df = df.rename(columns={
+        "dato": "Dato",
+        "consistente": "✓",
+        "Informe AF": "Informe AF",
+        "Plan Comp.": "Plan Comp.",
+    })
 
     def colorear(val):
         if val == "❌":
@@ -167,9 +175,9 @@ if st.button("🔍 Validar Paquete", type="primary"):
         return ""
 
     try:
-        styled = df.style.map(colorear, subset=["¿Consistente?"])
+        styled = df.style.map(colorear, subset=["✓"])
     except AttributeError:
-        styled = df.style.applymap(colorear, subset=["¿Consistente?"])
+        styled = df.style.applymap(colorear, subset=["✓"])
 
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
