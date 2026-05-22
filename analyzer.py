@@ -159,7 +159,7 @@ def extraer_informe_af(texto: str) -> dict:
     )
 
     r["nombre_proyecto"] = _extraer_texto(
-        r"(?:informe|plan)\s+de\s+aprovechamiento[^\n]{0,100}", texto
+        r"(?:informe|plan)\s+de\s+aprovechamiento\s+([^\n]{5,80})", texto
     )
 
     return r
@@ -193,7 +193,7 @@ def extraer_compensacion(texto: str) -> dict:
     )
 
     r["nombre_proyecto"] = _extraer_texto(
-        r"(?:plan|programa)\s+de\s+compensaci[oó]n[^\n]{0,100}", texto
+        r"(?:plan|programa)\s+de\s+compensaci[oó]n\s+([^\n]{5,80})", texto
     )
 
     return r
@@ -224,7 +224,7 @@ def extraer_aptitud_suelo(texto: str) -> dict:
     r["conclusion"] = m.group(1).strip()[:300] if m else None
 
     r["nombre_proyecto"] = _extraer_texto(
-        r"informe\s+(?:de\s+)?aptitud[^\n]{0,100}", texto
+        r"informe\s+(?:de\s+)?aptitud\s+([^\n]{5,80})", texto
     )
 
     return r
@@ -281,7 +281,7 @@ def extraer_costos(texto: str) -> dict:
     )
 
     r["nombre_proyecto"] = _extraer_texto(
-        r"(?:presupuesto|costos?)\s+(?:y\s+)?(?:presupuesto\s+)?(?:del\s+)?proyecto[^\n]{0,80}", texto
+        r"(?:presupuesto|costos?)\s+(?:y\s+)?(?:presupuesto\s+)?(?:del\s+)?proyecto\s+([^\n]{5,80})", texto
     )
 
     return r
