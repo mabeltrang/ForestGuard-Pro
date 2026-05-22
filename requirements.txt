@@ -1,7 +1,7 @@
 streamlit
-google-genai>=0.8.0
+google-genai>=2.0.0
 python-multipart
-PyPDF2
+pypdf
 python-docx
 pandas
 openpyxl
