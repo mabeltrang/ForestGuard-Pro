@@ -119,7 +119,7 @@ for nombre, tipo_auto in documentos_tipo.items():
     with c2:
         idx = tipo_opciones.index(tipo_auto) if tipo_auto in tipo_opciones else 5
         tipo_final = st.selectbox(
-            label="",
+            label=f"Tipo para {nombre}",
             options=tipo_opciones,
             index=idx,
             key=f"tipo_{nombre}",
@@ -179,7 +179,7 @@ if st.button("🔍 Validar Paquete", type="primary"):
     except AttributeError:
         styled = df.style.applymap(colorear, subset=["✓"])
 
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.dataframe(styled, width="stretch", hide_index=True)
 
     if incoherencias:
         st.markdown("---")
