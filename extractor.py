@@ -1,5 +1,5 @@
 import os
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 from docx import Document
 import pandas as pd
 
@@ -41,13 +41,11 @@ def extract_docx(file_path: str) -> str:
     doc = Document(file_path)
     parts = []
 
-    # Recorremos el documento en orden (párrafos y tablas mezclados)
     for block in iter_blocks(doc):
         if block["type"] == "paragraph":
             txt = block["text"].strip()
             if txt:
                 parts.append(txt)
-
         elif block["type"] == "table":
             parts.append(_table_to_text(block["table"]))
 
@@ -61,13 +59,15 @@ def iter_blocks(doc):
     pero aquí los entregamos en el orden que aparecen en el documento.
     """
     from docx.oxml.ns import qn
-
     body = doc.element.body
+
     for child in body:
         tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+
         if tag == "p":
             from docx.text.paragraph import Paragraph
             yield {"type": "paragraph", "text": Paragraph(child, doc).text}
+
         elif tag == "tbl":
             from docx.table import Table
             yield {"type": "table", "table": Table(child, doc)}
@@ -77,7 +77,7 @@ def _table_to_text(table) -> str:
     """
     Convierte una tabla en texto plano preservando contexto.
     Si la primera fila parece ser encabezado, produce líneas como:
-        'Nombre especie: Cedrela odorata | Individuos: 8 | Volumen: 0,816 m3'
+    'Nombre especie: Cedrela odorata | Individuos: 8 | Volumen: 0,816 m3'
     Si no tiene encabezado claro, produce líneas separadas por |.
     """
     rows = []
@@ -99,11 +99,10 @@ def _table_to_text(table) -> str:
 
     for i, row in enumerate(rows):
         if header and i == 0:
-            # Escribir el encabezado como referencia
             lines.append(" | ".join(row))
             continue
+
         if header:
-            # Combinar cabecera + valor para cada columna
             pairs = []
             for h, v in zip(header, row):
                 if v:
