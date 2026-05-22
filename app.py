@@ -166,11 +166,12 @@ if st.button("🔍 Validar Paquete", type="primary"):
             return "background-color: #d6f5d6; color: #1e8449"
         return ""
 
-    st.dataframe(
-        df.style.applymap(colorear, subset=["¿Consistente?"]),
-        use_container_width=True,
-        hide_index=True
-    )
+    try:
+        styled = df.style.map(colorear, subset=["¿Consistente?"])
+    except AttributeError:
+        styled = df.style.applymap(colorear, subset=["¿Consistente?"])
+
+    st.dataframe(styled, use_container_width=True, hide_index=True)
 
     if incoherencias:
         st.markdown("---")
