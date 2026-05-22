@@ -1,3 +1,4 @@
+
 import streamlit as st
 import os
 import tempfile
@@ -147,7 +148,7 @@ if st.button("🔍 Validar Paquete", type="primary"):
     incoherencias = resultado["incoherencias"]
     aritmetica = resultado["aritmetica"]
 
-    n_errores = sum(1 for f in cotejo if f["consistente"] == "❌")
+    n_errores = sum(1 for f in cotejo if f["✓"] == "❌")
     n_arit_errores = sum(1 for a in aritmetica if a["ok"] == "❌")
 
     if n_errores == 0 and n_arit_errores == 0:
