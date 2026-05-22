@@ -1,12 +1,11 @@
 """
 analyzer.py — Validador de paquetes forestales sin API de IA.
-Extrae valores clave de cada documento mediante regex y los cruza
-para detectar inconsistencias automáticamente.
 
-Estructura de costos:
-- Costo aprovechamiento  → Informe AF  + Doc Costos (tabla 1)
-- Costo compensación     → Informe AF o Plan Compensación separado + Doc Costos (tabla 2)
-- Costo instalación      → FUN + Doc Costos (tabla 3)
+Patrones basados en docs reales Unergy:
+- Separador de miles variable: coma ($ 526,468) o punto ($ 332.122)
+- Costo aprovechamiento: párrafo "valor aproximado de ... ($ XXX COP)" + tabla con Total
+- Costo compensación: fila "Valor total compensación (3 años)" + Total al final
+- Costo instalación: "TOTAL VALOR DEL PROYECTO EN NÚMEROS = (A+B)"
 """
 
 import re
@@ -20,36 +19,89 @@ def _normalizar(texto: str) -> str:
     return re.sub(r"\s+", " ", texto.lower().strip())
 
 
-def _extraer_numero(patron: str, texto: str, flags=re.IGNORECASE) -> str | None:
-    m = re.search(patron, texto, flags)
-    if m:
-        val = m.group(1).strip()
-        # Formato colombiano: 1.234.567,89 → quitar puntos de miles, coma→punto decimal
-        # Detectar si hay coma decimal (último separador es coma)
-        if re.search(r'\d,\d{1,2}$', val):
-            val = val.replace(".", "").replace(",", ".")
-        else:
-            val = val.replace(",", "")
-        return val
+def _cop_a_entero(val: str) -> str | None:
+    """Normaliza un valor monetario COP a entero sin separadores."""
+    if not val:
+        return None
+    # Quitar $ y espacios
+    val = val.replace("$", "").strip()
+    # Detectar formato: si termina en ,XX o .XX (dos dígitos) es decimal
+    if re.search(r'[,\.]\d{2}$', val):
+        # Quitar separadores de miles y convertir decimal
+        val = re.sub(r'[,\.](?=\d{3})', '', val)  # quitar separadores de miles
+        val = re.sub(r'[,\.](\d{2})$', '', val)    # quitar centavos
+    else:
+        # Solo separadores de miles
+        val = val.replace(",", "").replace(".", "")
+    val = val.strip()
+    return val if val.isdigit() else None
+
+
+def _extraer_cop_parrafo(texto: str, patron_inicio: str) -> str | None:
+    """
+    Extrae el valor COP del párrafo introductorio de una sección de costos.
+    Patrón: "valor aproximado de PALABRAS EN MAYÚSCULAS ($ 526,468 COP)"
+    """
+    m = re.search(patron_inicio, texto, re.IGNORECASE)
+    if not m:
+        return None
+    segmento = texto[m.start(): m.start() + 1000]
+    # Buscar ($ X,XXX,XXX COP) o ($ X.XXX.XXX COP)
+    m2 = re.search(r'\(\s*\$\s*([\d][,\.\d]+)\s*COP\)', segmento, re.IGNORECASE)
+    if m2:
+        return _cop_a_entero(m2.group(1))
+    # Alternativa: "$ 526,468" sin paréntesis cerca de "valor"
+    m3 = re.search(r'valor\s+aproximado[^\$]{0,60}\$\s*([\d][,\.\d]+)', segmento, re.IGNORECASE)
+    if m3:
+        return _cop_a_entero(m3.group(1))
     return None
 
 
-def _extraer_todos(patron: str, texto: str, flags=re.IGNORECASE) -> list:
-    """Devuelve todos los grupos capturados que coincidan."""
-    return [m.group(1).strip() for m in re.finditer(patron, texto, flags)]
+def _extraer_cop_tabla_total(texto: str, patron_inicio: str) -> str | None:
+    """
+    Extrae el valor de la fila 'Total' al final de una tabla de costos.
+    Busca la última fila Total dentro de la sección.
+    """
+    m = re.search(patron_inicio, texto, re.IGNORECASE)
+    if not m:
+        return None
+    segmento = texto[m.start(): m.start() + 5000]
+
+    # Buscar todas las filas | Total | ... | $ X,XXX,XXX |
+    # Dos formatos: coma miles ($526,468) o punto miles ($332.122)
+    candidatos = re.findall(
+        r'\|\s*\*?\*?Total\*?\*?\s*\|[^\|]*\|\s*\*?\*?\s*\$?\s*([\d][\d,\.]+)\s*\*?\*?\s*\|',
+        segmento, re.IGNORECASE
+    )
+    # También buscar formato "Total | $ X,XXX,XXX" sin columnas adicionales
+    candidatos2 = re.findall(
+        r'\|\s*\*?\*?Total\*?\*?\s*\|\s*\*?\*?\$?\s*([\d][\d,\.]+)\s*\*?\*?\s*\|',
+        segmento, re.IGNORECASE
+    )
+    todos = candidatos + candidatos2
+
+    if todos:
+        # El último total del segmento es el grand total
+        val = todos[-1]
+        return _cop_a_entero(val)
+    return None
+
+
+def _extraer_numero(patron: str, texto: str, flags=re.IGNORECASE) -> str | None:
+    m = re.search(patron, texto, flags)
+    if not m:
+        return None
+    val = m.group(1).strip()
+    if re.search(r'[,\.]\d{2}$', val):
+        val = val.replace(".", "").replace(",", ".")
+    else:
+        val = val.replace(",", "").replace(".", "")
+    return val if val else None
 
 
 def _extraer_texto(patron: str, texto: str, flags=re.IGNORECASE) -> str | None:
     m = re.search(patron, texto, flags)
     return m.group(1).strip() if m else None
-
-
-def _limpiar_cop(val: str) -> str | None:
-    """Normaliza un valor monetario COP: quita puntos de miles."""
-    if not val:
-        return None
-    val = val.replace(".", "").replace(",", "")
-    return val if val.isdigit() else None
 
 
 # ---------------------------------------------------------------------------
@@ -62,72 +114,79 @@ def extraer_fun(texto: str) -> dict:
     r["individuos"] = _extraer_numero(
         r"cantidad\s+total[^\d]{0,30}(\d{1,4})", texto
     )
-
     r["volumen_m3"] = _extraer_numero(
         r"cantidad\s+total[^\d]{0,80}([\d,\.]+)\s*m(?:etros?\s*c[uú]bicos?|3|³)", texto
     ) or _extraer_numero(
         r"([\d,\.]+)\s*m(?:etros?\s*c[uú]bicos?|3|³)\s*de\s*volumen", texto
     )
-
     r["area_ha"] = _extraer_numero(
         r"superficie\s*\(ha\)[^\d]{0,20}([\d,\.]+)", texto
     ) or _extraer_numero(
         r"[áa]rea[^\d]{0,30}([\d,\.]+)\s*ha", texto
     )
-
-    # Costo instalación en el FUN — campo "Costo del Proyecto, Obra o Actividad"
+    # Costo instalación: campo "Costo del Proyecto, Obra o Actividad"
     r["costo_instalacion"] = _extraer_numero(
-        r"costo\s+del\s+proyecto[,\s]+obra[^\d]{0,30}([\d\.\,]+)", texto
+        r"costo\s+del\s+proyecto[,\s]+obra[^\d]{0,40}([\d\.,]{6,})", texto
     ) or _extraer_numero(
-        r"costo\s+del\s+proyecto[^\d]{0,30}([\d\.\,]+)", texto
+        r"costo\s+del\s+proyecto[^\d]{0,40}([\d\.,]{6,})", texto
     )
-
     r["municipio"] = _extraer_texto(
         r"municipio[:\s]+([A-Za-záéíóúÁÉÍÓÚñÑ\s]+?)(?:\n|,|departamento)", texto
     )
-
     r["nombre_proyecto"] = _extraer_texto(
         r"nombre\s+del\s+proyecto[:\s]+([^\n]{5,80})", texto
     ) or _extraer_texto(
-        r"minigranja\s+solar\s+([A-Za-záéíóúÁÉÍÓÚñÑ\s]+?)(?:\n|\.)", texto
+        r"minigranja\s+solar\s+([A-Za-záéíóúÁÉÍÓÚñÑ\s\w_]+?)(?:\n|\.)", texto
     )
-
     return r
 
 
 def extraer_informe_af(texto: str) -> dict:
     """
-    Extrae del Informe de Aprovechamiento Forestal.
-    También puede contener el Plan de Compensación con su costo.
+    Informe AF — contiene costo aprovechamiento, y a veces también costo reposición.
     """
     r = {}
 
+    # Individuos
     r["individuos_intro"] = _extraer_numero(
         r"aprovechamiento\s+(?:forestal\s+)?de\s+(\d{1,4})\s+[áa]rboles?", texto
     )
-    r["individuos_tabla"] = _extraer_numero(
-        r"total[^\d]{0,20}(\d{1,4})\s*(?:individuos?|[áa]rboles?)?", texto
-    )
+    # Fila Total en tabla de especies: | Total | 8 |
+    m_total = re.search(r'\|\s*\*?\*?Total\*?\*?\s*\|\s*\*?\*?(\d{1,4})\*?\*?\s*\|', texto)
+    r["individuos_tabla"] = m_total.group(1) if m_total else None
     r["individuos"] = r["individuos_intro"] or r["individuos_tabla"]
 
+    # Individuos a reponer — "siembra de X individuos" o "15 nuevos individuos"
     r["individuos_reponer"] = _extraer_numero(
-        r"(?:reposici[oó]n|compensaci[oó]n|reponer|plantar)[^\d]{0,40}(\d{1,4})\s*(?:individuos?|[áa]rboles?|pl[áa]ntulas?)", texto
+        r"siembra\s+de\s+(\d{1,4})\s*(?:individuos?|[áa]rboles?|pl[áa]ntulas?)", texto
     ) or _extraer_numero(
-        r"(\d{1,4})\s*(?:individuos?|[áa]rboles?)\s*(?:a\s+)?(?:reponer|plantar|resembrar)", texto
+        r"plantaci[oó]n\s+de\s+(?:un\s+total\s+de\s+)?(\d{1,4})\s*(?:nuevos?\s+)?(?:individuos?|[áa]rboles?)", texto
+    ) or _extraer_numero(
+        r"total\s+de\s+(\d{1,4})\s*(?:nuevos?\s+)?(?:individuos?|[áa]rboles?)", texto
     )
 
+    # Factor de reposición
     r["factor_reposicion"] = _extraer_numero(
-        r"factor\s+de\s+(?:reposici[oó]n|compensaci[oó]n)[^\d]{0,20}(\d{1,2})", texto
+        r"siembra\s+de\s+(?:cinco|cuatro|tres|dos|diez|\d{1,2})\s*\((\d{1,2})\)\s*nuevos?\s+[áa]rboles?\s+por\s+cada", texto
     ) or _extraer_numero(
-        r"(\d{1,2})\s*[áa]rboles?\s+por\s+(?:cada\s+)?[áa]rbol\s+talado", texto
+        r"factor\s+de\s+reposici[oó]n[^\d]{0,20}(\d{1,2})", texto
+    ) or _extraer_numero(
+        r"(\d{1,2})\s*[áa]rboles?\s+por\s+(?:cada\s+)?(?:individuo|[áa]rbol)\s+talado", texto
     )
 
+    # Volumen total — del párrafo resumen (no tabla de especies)
     r["volumen_m3"] = _extraer_numero(
-        r"(?:volumen|tala)[^\d]{0,40}([\d,\.]+)\s*m(?:3|³|etros?\s*c[uú]bicos?)", texto
+        r"con\s+([\d,\.]+)\s*metros?\s*c[uú]bicos?\s*\(m[³3]\)", texto
+    ) or _extraer_numero(
+        r"asciende\s+a[^\d]{0,30}([\d,\.]+)\s*metros?\s*c[uú]bicos?", texto
+    ) or _extraer_numero(
+        r"([\d,\.]+)\s*metros?\s*c[uú]bicos?\s*\(m[³3]\)\s*de\s*madera", texto
     )
 
     r["area_ha"] = _extraer_numero(
-        r"[áa]rea[^\d]{0,30}([\d,\.]+)\s*(?:hect[áa]reas?|ha\b)", texto
+        r"un\s+[áa]rea\s+de\s+([\d,\.]+)\s*(?:hect[áa]reas?|ha)", texto
+    ) or _extraer_numero(
+        r"[áa]rea\s+de\s+([\d,\.]+)\s*(?:hect[áa]reas?|ha)\b", texto
     )
 
     potencias = re.findall(r"([\d,\.]+)\s*k[Ww][Pp]?\b", texto, re.IGNORECASE)
@@ -140,57 +199,59 @@ def extraer_informe_af(texto: str) -> dict:
     else:
         r["distribuidora"] = None
 
-    # --- Costo de aprovechamiento forestal (dentro del Informe AF) ---
-    r["costo_aprovechamiento"] = _extraer_numero(
-        r"total[^\d]{0,40}(?:costo[s]?\s+de\s+)?aprovechamiento[^\d]{0,20}([\d\.\,]+)", texto
-    ) or _extraer_numero(
-        r"(?:costo[s]?\s+)?(?:total\s+)?(?:de\s+)?tala[^\d]{0,30}([\d\.\,]+)", texto
-    ) or _extraer_numero(
-        r"valor\s+total[^\d]{0,30}aprovechamiento[^\d]{0,20}([\d\.\,]+)", texto
+    # Costo aprovechamiento — del párrafo "($ 526,468 COP)" antes de la tabla
+    r["costo_aprovechamiento"] = _extraer_cop_parrafo(
+        texto, r"costo\s+estimado\s+para\s+la\s+tala\s+y\s+aprovechamiento"
     )
+    # Fallback: última fila Total de la tabla de costos de aprovechamiento
+    if not r["costo_aprovechamiento"]:
+        r["costo_aprovechamiento"] = _extraer_cop_tabla_total(
+            texto, r"[Tt]abla\s+\d+\.?\s*[Cc]ostos?\s+de\s+aprovechamiento"
+        )
 
-    # --- Costo de compensación (puede estar acá si no hay doc separado) ---
-    r["costo_compensacion"] = _extraer_numero(
-        r"total[^\d]{0,40}(?:costo[s]?\s+de\s+)?compensaci[oó]n[^\d]{0,20}([\d\.\,]+)", texto
-    ) or _extraer_numero(
-        r"total[^\d]{0,40}reposici[oó]n[^\d]{0,20}([\d\.\,]+)", texto
-    ) or _extraer_numero(
-        r"valor\s+total[^\d]{0,30}compensaci[oó]n[^\d]{0,20}([\d\.\,]+)", texto
+    # Costo compensación/reposición (si está en este doc — mismo patrón de párrafo)
+    r["costo_compensacion"] = _extraer_cop_parrafo(
+        texto, r"plan\s+de\s+(?:reposici[oó]n|compensaci[oó]n)\s+forestal\s+corresponde|costos\s+totales\s+de\s+las\s+actividades\s+de\s+(?:compensaci[oó]n|reposici[oó]n)"
     )
+    if not r["costo_compensacion"]:
+        r["costo_compensacion"] = _extraer_cop_tabla_total(
+            texto, r"[Tt]abla\s+\d+\.?\s*[Cc]ostos?\s+de\s+reposici[oó]n|[Vv]alor\s+total\s+compensaci[oó]n"
+        )
 
     r["nombre_proyecto"] = _extraer_texto(
-        r"(?:informe|plan)\s+de\s+aprovechamiento\s+([^\n]{5,80})", texto
+        r"(?:informe|plan|documento\s+técnico)\s+para\s+el\s+aprovechamiento[^\n]{0,5}\n([^\n]{5,80})", texto
     )
 
     return r
 
 
 def extraer_compensacion(texto: str) -> dict:
-    """
-    Extrae del Plan de Compensación cuando viene como documento separado.
-    """
+    """Plan de Compensación como documento separado."""
     r = {}
 
     r["individuos_reponer"] = _extraer_numero(
-        r"(?:reposici[oó]n|compensaci[oó]n|sembrar|plantar)[^\d]{0,40}(\d{1,4})\s*(?:individuos?|[áa]rboles?|pl[áa]ntulas?)", texto
+        r"siembra\s+de\s+(\d{1,4})\s*(?:individuos?|[áa]rboles?|pl[áa]ntulas?)", texto
     ) or _extraer_numero(
-        r"(\d{1,4})\s*(?:individuos?|[áa]rboles?|pl[áa]ntulas?)\s*(?:a\s+)?(?:reponer|plantar|sembrar)", texto
+        r"plantaci[oó]n\s+de\s+(?:un\s+total\s+de\s+)?(\d{1,4})\s*(?:nuevos?\s+)?(?:individuos?|[áa]rboles?)", texto
     )
 
     r["factor_reposicion"] = _extraer_numero(
-        r"factor\s+de\s+(?:reposici[oó]n|compensaci[oó]n)[^\d]{0,20}(\d{1,2})", texto
+        r"siembra\s+de\s+(?:cinco|cuatro|tres|dos|diez|\d{1,2})\s*\((\d{1,2})\)\s*nuevos?\s+[áa]rboles?\s+por\s+cada", texto
+    ) or _extraer_numero(
+        r"factor\s+de\s+reposici[oó]n[^\d]{0,20}(\d{1,2})", texto
     )
 
-    # Costo total de compensación — total de la tabla de costos de compensación
-    r["costo_compensacion"] = _extraer_numero(
-        r"total[^\d]{0,40}(?:costo[s]?\s+de\s+)?compensaci[oó]n[^\d]{0,20}([\d\.\,]+)", texto
-    ) or _extraer_numero(
-        r"total[^\d]{0,40}reposici[oó]n[^\d]{0,20}([\d\.\,]+)", texto
-    ) or _extraer_numero(
-        r"valor\s+total[^\d]{0,30}compensaci[oó]n[^\d]{0,20}([\d\.\,]+)", texto
-    ) or _extraer_numero(
-        r"(?:gran\s+)?total[^\d]{0,20}([\d\.\,]{6,})", texto  # fallback: primer gran total numérico
+    # Costo — "COP $34,320,000" o tabla Total
+    r["costo_compensacion"] = _extraer_cop_parrafo(
+        texto, r"costos?\s+y\s+presupuesto"
+    ) or _extraer_cop_tabla_total(
+        texto, r"[Vv]alor\s+total\s+compensaci[oó]n|[Tt]abla\s+\d+.*[Cc]ostos?\s+de\s+reposici[oó]n"
     )
+    # Formato especial Plan Comp: "COP $34,320,000"
+    if not r["costo_compensacion"]:
+        m = re.search(r'COP\s*\$\s*([\d][,\.\d]+)', texto)
+        if m:
+            r["costo_compensacion"] = _cop_a_entero(m.group(1))
 
     r["nombre_proyecto"] = _extraer_texto(
         r"(?:plan|programa)\s+de\s+compensaci[oó]n\s+([^\n]{5,80})", texto
@@ -205,11 +266,9 @@ def extraer_aptitud_suelo(texto: str) -> dict:
     r["individuos"] = _extraer_numero(
         r"(\d{1,4})\s*(?:individuos?|[áa]rboles?)\s*(?:a\s+)?(?:aprovechar|talar|intervenir)", texto
     )
-
     r["area_ha"] = _extraer_numero(
         r"[áa]rea[^\d]{0,30}([\d,\.]+)\s*(?:hect[áa]reas?|ha\b)", texto
     )
-
     potencias = re.findall(r"([\d,\.]+)\s*k[Ww][Pp]?\b", texto, re.IGNORECASE)
     r["potencia_kwp"] = potencias[0].replace(",", ".") if potencias else None
 
@@ -220,103 +279,63 @@ def extraer_aptitud_suelo(texto: str) -> dict:
     else:
         r["distribuidora"] = None
 
-    m = re.search(r"conclusi[oó]n(?:es)?[\s\S]{0,50}\n([\s\S]{50,600}?)(?:\n\n|\Z)", texto, re.IGNORECASE)
+    m = re.search(r"conclusi[oó]n(?:es)?[\s\S]{0,50}\n([\s\S]{50,400}?)(?:\n\n|\Z)", texto, re.IGNORECASE)
     r["conclusion"] = m.group(1).strip()[:300] if m else None
 
     r["nombre_proyecto"] = _extraer_texto(
         r"informe\s+(?:de\s+)?aptitud\s+([^\n]{5,80})", texto
     )
-
     return r
 
 
 def extraer_costos(texto: str) -> dict:
     """
-    Doc de Costos y Presupuesto — tres tablas separadas con su propio subtotal.
-    Tabla 1: Aprovechamiento forestal
-    Tabla 2: Compensación / Reposición
-    Tabla 3: Instalación del proyecto
+    Doc Costos y Presupuesto — tres secciones:
+    1. COSTOS DEL APROVECHAMIENTO FORESTAL → Total $ 526,468
+    2. COSTOS DE LA COMPENSACIÓN → Total $ 15,739,846
+    3. COSTOS DE LA IMPLEMENTACIÓN → TOTAL VALOR DEL PROYECTO = $ 495,705,000
     """
     r = {}
 
     r["individuos"] = _extraer_numero(
         r"aprovechamiento\s+(?:forestal\s+)?de\s+(\d{1,4})\s+[áa]rboles?", texto
-    ) or _extraer_numero(
-        r"(\d{1,4})\s*[áa]rboles?\s*(?:a\s+)?(?:aprovechar|talar)", texto
     )
-
     r["individuos_reponer"] = _extraer_numero(
-        r"(?:reposici[oó]n|compensaci[oó]n)\s+de\s+(\d{1,4})\s*(?:individuos?|[áa]rboles?|pl[áa]ntulas?)", texto
-    ) or _extraer_numero(
-        r"(\d{1,4})\s*(?:individuos?|[áa]rboles?)\s*a\s+(?:reponer|plantar|compensar)", texto
+        r"siembra\s+de\s+(\d{1,4})\s*(?:individuos?|[áa]rboles?)", texto
     )
-
+    # Volumen — "Producto: Tala | Unidad: m3 | Cantidad: 2.771" o "| Tala | m3 | 2.771 |"
     r["volumen_m3"] = _extraer_numero(
-        r"tala[^\d]{0,30}([\d,\.]+)\s*m(?:3|³)?", texto
+        r'[Pp]roducto:\s*Tala\s*\|\s*[Uu]nidad:\s*m3\s*\|\s*[Cc]antidad:\s*([\d,\.]+)', texto
+    ) or _extraer_numero(
+        r'\|\s*Tala\s*\|\s*m3\s*\|\s*([\d,\.]+)', texto
     )
 
-    # ---- Tabla 1: Costo de aprovechamiento ----
-    # Buscar el total de la sección de aprovechamiento
-    # Estrategia: encontrar la sección y luego el último total antes de la siguiente sección
-    r["costo_aprovechamiento"] = _extraer_costo_seccion(
-        texto,
-        inicio=r"(?:costos?\s+de\s+)?aprovechamiento\s+forestal",
-        fin=r"(?:costos?\s+de\s+)?(?:compensaci[oó]n|reposici[oó]n|instalaci[oó]n|implementaci[oó]n)"
+    # Costo aprovechamiento — párrafo + tabla
+    r["costo_aprovechamiento"] = _extraer_cop_parrafo(
+        texto, r"costos?\s+del?\s+aprovechamiento\s+forestal"
     )
+    if not r["costo_aprovechamiento"]:
+        r["costo_aprovechamiento"] = _extraer_cop_tabla_total(
+            texto, r"[Tt]abla\s+1[\.\s]*[Cc]ostos?\s+de\s+aprovechamiento"
+        )
 
-    # ---- Tabla 2: Costo de compensación ----
-    r["costo_compensacion"] = _extraer_costo_seccion(
-        texto,
-        inicio=r"(?:costos?\s+de\s+)?(?:compensaci[oó]n|reposici[oó]n)",
-        fin=r"(?:costos?\s+de\s+)?(?:instalaci[oó]n|implementaci[oó]n|proyecto|total\s+valor)"
+    # Costo compensación — mismo patrón de párrafo que aprovechamiento
+    r["costo_compensacion"] = _extraer_cop_parrafo(
+        texto, r"costos?\s+de\s+la\s+compensaci[oó]n|plan\s+de\s+reposici[oó]n\s+forestal\s+corresponde"
     )
+    if not r["costo_compensacion"]:
+        r["costo_compensacion"] = _extraer_cop_tabla_total(
+            texto, r"[Vv]alor\s+total\s+compensaci[oó]n"
+        )
 
-    # ---- Tabla 3: Costo de instalación ----
+    # Costo instalación — "TOTAL VALOR DEL PROYECTO EN NÚMEROS = (A+B) | 495,705,000"
     r["costo_instalacion"] = _extraer_numero(
-        r"total\s+valor\s+del\s+proyecto[^\d]{0,20}([\d\.\,]+)", texto
-    ) or _extraer_costo_seccion(
-        texto,
-        inicio=r"(?:costos?\s+de\s+)?(?:instalaci[oó]n|implementaci[oó]n|proyecto)",
-        fin=r"(?:gran\s+total|total\s+general|\Z)"
-    )
-
-    r["nombre_proyecto"] = _extraer_texto(
-        r"(?:presupuesto|costos?)\s+(?:y\s+)?(?:presupuesto\s+)?(?:del\s+)?proyecto\s+([^\n]{5,80})", texto
+        r"TOTAL\s+VALOR\s+DEL\s+PROYECTO\s+EN\s+N[ÚU]MEROS[^\d]{0,30}([\d\.,]{6,})", texto
+    ) or _extraer_numero(
+        r"Total\s+de\s+la\s+inversi[oó]n\s+y\s+la\s+operaci[oó]n[^\d]{0,10}\$\s*([\d\.,]{6,})", texto
     )
 
     return r
-
-
-def _extraer_costo_seccion(texto: str, inicio: str, fin: str) -> str | None:
-    """
-    Extrae el valor total de una sección delimitada por patrones de inicio y fin.
-    Busca el último número grande (>=4 dígitos) antes del patrón fin.
-    """
-    m_ini = re.search(inicio, texto, re.IGNORECASE)
-    if not m_ini:
-        return None
-
-    pos_ini = m_ini.start()
-    texto_desde = texto[pos_ini:]
-
-    m_fin = re.search(fin, texto_desde, re.IGNORECASE)
-    segmento = texto_desde[:m_fin.start()] if m_fin else texto_desde[:3000]
-
-    # Buscar "total" seguido de número grande en el segmento
-    candidatos = re.findall(
-        r"total[^\d]{0,30}([\d\.]{4,}(?:[,\d]{0,10})?)", segmento, re.IGNORECASE
-    )
-    if candidatos:
-        val = candidatos[-1]  # el último total del segmento
-        return val.replace(".", "").replace(",", "")
-
-    # Fallback: último número grande del segmento (>=6 dígitos = al menos $100.000)
-    numeros = re.findall(r"([\d\.]{6,})", segmento)
-    if numeros:
-        val = numeros[-1].replace(".", "")
-        return val if len(val) >= 5 else None
-
-    return None
 
 
 def extraer_oficio(texto: str) -> dict:
@@ -325,11 +344,9 @@ def extraer_oficio(texto: str) -> dict:
     r["individuos"] = _extraer_numero(
         r"aprovechamiento\s+forestal\s+de\s+(\d{1,4})\s+[áa]rboles?", texto
     )
-
     r["nombre_proyecto"] = _extraer_texto(
         r"proyecto\s+[\"«]?([^\n\"»]{5,80})[\"»]?", texto
     )
-
     for nombre in ["afinia", "cens", "aire", "air-e", "enel", "celsia", "codensa", "epsa", "chec", "essa"]:
         if nombre in texto.lower():
             r["distribuidora"] = nombre.upper()
@@ -344,7 +361,7 @@ def extraer_oficio(texto: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# CLASIFICACIÓN DE TIPO DE DOCUMENTO
+# CLASIFICACIÓN
 # ---------------------------------------------------------------------------
 
 TIPOS = {
@@ -354,31 +371,33 @@ TIPOS = {
     ],
     "INFORME_AF": [
         "informe de aprovechamiento", "plan de aprovechamiento",
-        "informe forestal", "factor de reposición", "árboles aislados"
+        "documento técnico para el aprovechamiento",
+        "factor de reposición", "árboles aislados", "costos de aprovechamiento"
     ],
     "COMPENSACION": [
         "plan de compensación", "plan de reposición", "programa de compensación",
-        "compensacion forestal", "reposicion forestal"
+        "compensacion forestal", "reposicion forestal", "restauración ecológica"
     ],
     "APTITUD": [
         "aptitud del suelo", "aptitud de suelo", "vocación del suelo",
         "estudio técnico", "uso del suelo"
     ],
     "COSTOS": [
-        "costos y presupuesto", "presupuesto", "total valor del proyecto",
-        "plan de costos", "costo total de aprovechamiento", "costo total de compensación"
+        "costos y presupuesto", "costos del aprovechamiento, de la compensación",
+        "total valor del proyecto", "costos de la implementación",
+        "costos de la compensación", "costos de inversión"
     ],
     "OFICIO": [
-        "solicitud de aprovechamiento forestal único",
+        "solicitud de aprovechamiento forestal",
         "cordial saludo", "se permite presentar",
-        "adjunta la siguiente documentación"
+        "adjunta la siguiente documentación", "oficio"
     ],
 }
 
 
 def clasificar_documento(nombre_archivo: str, texto: str) -> str:
     nombre = nombre_archivo.lower()
-    texto_n = _normalizar(texto[:3000])
+    texto_n = _normalizar(texto[:4000])
 
     puntajes = {tipo: 0 for tipo in TIPOS}
 
@@ -394,10 +413,10 @@ def clasificar_documento(nombre_archivo: str, texto: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# MOTOR DE COMPARACIÓN
+# COMPARACIÓN Y ANÁLISIS
 # ---------------------------------------------------------------------------
 
-def _comparar(val_a: str | None, val_b: str | None, tolerancia_pct: float = 2.0) -> bool:
+def _comparar(val_a, val_b, tolerancia_pct: float = 1.0) -> bool:
     if val_a is None or val_b is None:
         return True
     try:
@@ -408,10 +427,23 @@ def _comparar(val_a: str | None, val_b: str | None, tolerancia_pct: float = 2.0)
         diff_pct = abs(a - b) / max(abs(a), abs(b)) * 100
         return diff_pct <= tolerancia_pct
     except ValueError:
-        return val_a.strip().lower() == val_b.strip().lower()
+        return str(val_a).strip().lower() == str(val_b).strip().lower()
 
 
-def analizar_paquete(documentos: dict[str, dict]) -> dict:
+def _fmt(val) -> str:
+    """Formatea un valor numérico como COP legible o lo devuelve tal cual."""
+    if val is None:
+        return "—"
+    try:
+        n = int(float(val))
+        if n > 10000:
+            return f"${n:,}".replace(",", ".")
+        return str(val)
+    except Exception:
+        return str(val) if val else "—"
+
+
+def analizar_paquete(documentos: dict) -> dict:
     fun  = documentos.get("FUN", {})
     af   = documentos.get("INFORME_AF", {})
     comp = documentos.get("COMPENSACION", {})
@@ -419,9 +451,9 @@ def analizar_paquete(documentos: dict[str, dict]) -> dict:
     cos  = documentos.get("COSTOS", {})
     ofi  = documentos.get("OFICIO", {})
 
-    # El costo de compensación puede venir del AF o del doc separado
-    costo_comp_fuente = comp.get("costo_compensacion") or af.get("costo_compensacion")
-    costo_comp_label  = "Plan Comp." if comp.get("costo_compensacion") else "Informe AF"
+    # Costo compensación: priorizar doc separado, fallback al AF
+    costo_comp_val   = comp.get("costo_compensacion") or af.get("costo_compensacion")
+    costo_comp_label = "Plan Comp." if comp.get("costo_compensacion") else "Informe AF"
 
     filas_cotejo = []
     incoherencias = []
@@ -442,22 +474,22 @@ def analizar_paquete(documentos: dict[str, dict]) -> dict:
 
         filas_cotejo.append({
             "dato": dato,
-            "FUN": vals.get("FUN", "—") or "—",
-            "Informe AF": vals.get("Informe AF", "—") or "—",
-            "Plan Comp.": vals.get("Plan Comp.", "—") or "—",
-            "Aptitud": vals.get("Aptitud", "—") or "—",
-            "Costos": vals.get("Costos", "—") or "—",
-            "Oficio": vals.get("Oficio", "—") or "—",
+            "FUN": _fmt(vals.get("FUN")),
+            "Informe AF": _fmt(vals.get("Informe AF")),
+            "Plan Comp.": _fmt(vals.get("Plan Comp.")),
+            "Aptitud": _fmt(vals.get("Aptitud")),
+            "Costos": _fmt(vals.get("Costos")),
+            "Oficio": _fmt(vals.get("Oficio")),
             "✓": consistente,
         })
 
         if consistente == "❌":
             incoherencias.append({
                 "dato": dato,
-                "valores": {k: v for k, v in vals.items() if v is not None}
+                "valores": {k: _fmt(v) for k, v in vals.items() if v is not None}
             })
 
-    # ---- Individuos ----
+    # ---- Filas ----
     fila("Individuos a aprovechar", {
         "FUN": fun.get("individuos"),
         "Informe AF": af.get("individuos"),
@@ -465,81 +497,73 @@ def analizar_paquete(documentos: dict[str, dict]) -> dict:
         "Costos": cos.get("individuos"),
         "Oficio": ofi.get("individuos"),
     })
-
     fila("Volumen aprovechamiento (m³)", {
         "Informe AF": af.get("volumen_m3"),
         "Costos": cos.get("volumen_m3"),
     })
-
-    fila("Individuos a reponer/compensar", {
+    fila("Individuos a reponer", {
         "Informe AF": af.get("individuos_reponer"),
         "Plan Comp.": comp.get("individuos_reponer"),
         "Costos": cos.get("individuos_reponer"),
     })
-
     fila("Área del predio (ha)", {
         "FUN": fun.get("area_ha"),
         "Informe AF": af.get("area_ha"),
         "Aptitud": apt.get("area_ha"),
     })
-
     fila("Potencia del proyecto (kWp)", {
         "Informe AF": af.get("potencia_kwp"),
         "Aptitud": apt.get("potencia_kwp"),
         "Oficio": ofi.get("potencia_kwp"),
     })
-
     fila("Empresa distribuidora", {
         "Informe AF": af.get("distribuidora"),
         "Aptitud": apt.get("distribuidora"),
         "Oficio": ofi.get("distribuidora"),
     })
-
-    # ---- COSTOS — el cruce clave ----
     fila("💰 Costo aprovechamiento (COP)", {
         "Informe AF": af.get("costo_aprovechamiento"),
         "Costos": cos.get("costo_aprovechamiento"),
     })
-
     fila("💰 Costo compensación (COP)", {
-        costo_comp_label: costo_comp_fuente,
+        costo_comp_label: costo_comp_val,
         "Costos": cos.get("costo_compensacion"),
     })
-
     fila("💰 Costo instalación proyecto (COP)", {
         "FUN": fun.get("costo_instalacion"),
         "Costos": cos.get("costo_instalacion"),
     })
 
-    # ---- Verificación aritmética ----
+    # ---- Aritmética ----
     aritmetica = []
 
-    # Factor de reposición
     ind    = af.get("individuos")
     factor = af.get("factor_reposicion") or comp.get("factor_reposicion")
     reponer = af.get("individuos_reponer") or comp.get("individuos_reponer")
     if ind and factor and reponer:
-        esperado = int(float(ind)) * int(float(factor))
-        real = int(float(reponer))
-        ok = abs(esperado - real) <= 1
-        aritmetica.append({
-            "verificacion": "Factor de reposición",
-            "operacion": f"{ind} árboles × factor {factor} = {esperado} esperados",
-            "reportado": str(reponer),
-            "ok": "✅" if ok else "❌"
-        })
+        try:
+            esperado = int(float(ind)) * int(float(factor))
+            real = int(float(reponer))
+            ok = abs(esperado - real) <= 1
+            aritmetica.append({
+                "verificacion": "Factor de reposición",
+                "operacion": f"{ind} árboles × factor {factor} = {esperado} esperados",
+                "reportado": str(reponer),
+                "ok": "✅" if ok else "❌"
+            })
+        except Exception:
+            pass
 
-    # Suma de los tres costos vs total en doc Costos (si se pueden sumar)
-    c_ap  = cos.get("costo_aprovechamiento")
-    c_co  = cos.get("costo_compensacion")
-    c_in  = cos.get("costo_instalacion")
+    c_ap = cos.get("costo_aprovechamiento")
+    c_co = cos.get("costo_compensacion")
+    c_in = cos.get("costo_instalacion")
     if c_ap and c_co and c_in:
         try:
-            total_calculado = int(c_ap) + int(c_co) + int(c_in)
+            total = int(c_ap) + int(c_co) + int(c_in)
             aritmetica.append({
                 "verificacion": "Suma de los tres costos",
-                "operacion": f"Aprov. {int(c_ap):,} + Comp. {int(c_co):,} + Instal. {int(c_in):,}",
-                "reportado": f"= {total_calculado:,} COP",
+                "operacion": f"Aprov. {_fmt(c_ap)} + Comp. {_fmt(c_co)} + Instal. {_fmt(c_in)}",
+                "reportado": f"= {_fmt(str(total))} COP",
                 "ok": "ℹ️"
             })
         except Exception:
