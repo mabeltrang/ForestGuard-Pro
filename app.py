@@ -205,120 +205,118 @@ if uploaded_files:
     # ---------------------------------------------------------------------------
     st.markdown("---")
     if st.button("🔍 Validar Paquete", type="primary"):
-    
+
         if len(documentos_datos) < 2:
-            st.warning("Sube al menos 2 documentos clasificados para comparar.")
-            st.stop()
-    
-        resultado = analizar_paquete(documentos_datos)
-        cotejo = resultado["cotejo"]
-        incoherencias = resultado["incoherencias"]
-        aritmetica = resultado["aritmetica"]
-    
-        n_errores = sum(1 for f in cotejo if f["✓"] == "❌")
-        n_arit_errores = sum(1 for a in aritmetica if a["ok"] == "❌")
-    
-        if n_errores == 0 and n_arit_errores == 0:
-            st.success("✅ No se detectaron inconsistencias. El paquete parece consistente.")
+            st.warning("Sube al menos 2 documentos clasificados para comparar. Para revisar imágenes de un solo doc, usa el panel lateral.")
         else:
-            st.error(f"❌ Se detectaron **{n_errores} inconsistencia(s)** entre documentos y **{n_arit_errores} error(es) aritmético(s)**.")
-    
-        st.markdown("---")
-        st.subheader("2️⃣ Tabla de cotejo")
-    
-        import pandas as pd
-        df = pd.DataFrame(cotejo)
-        df = df.rename(columns={
-            "dato": "Dato",
-            "consistente": "✓",
-            "Informe AF": "Informe AF",
-            "Plan Comp.": "Plan Comp.",
-        })
-    
-        def colorear(val):
-            if val == "❌":
-                return "background-color: #ffd6d6; color: #c0392b; font-weight: bold"
-            if val == "✅":
-                return "background-color: #d6f5d6; color: #1e8449"
-            return ""
-    
-        try:
-            styled = df.style.map(colorear, subset=["✓"])
-        except AttributeError:
-            styled = df.style.applymap(colorear, subset=["✓"])
-    
-        st.dataframe(styled, width="stretch", hide_index=True)
-    
-        if incoherencias:
-            st.markdown("---")
-            st.subheader("3️⃣ Detalle de inconsistencias")
-            for i, inc in enumerate(incoherencias, 1):
-                with st.expander(f"❌ INCOHERENCIA #{i} — {inc['dato']}", expanded=True):
-                    for doc, val in inc["valores"].items():
-                        st.markdown(f"- **{doc}:** `{val}`")
-                    st.caption("Corrige el valor en el documento que tenga el error antes de radicar.")
-    
-        if aritmetica:
-            st.markdown("---")
-            st.subheader("4️⃣ Verificación aritmética")
-            for a in aritmetica:
-                st.markdown(
-                    f"{a['ok']} **{a['verificacion']}** — "
-                    f"{a['operacion']} → reportado: `{a['reportado']}`"
-                )
-    
-        # ── ANÁLISIS VISUAL DE IMÁGENES Y MAPAS ──────────────────────────────────
-        pdfs_con_imagenes = {
-            nombre: documentos_pdfbytes[nombre]
-            for nombre, tipo in asignaciones.items()
-            if nombre in documentos_pdfbytes
-        }
-    
-        if pdfs_con_imagenes:
-            st.markdown("---")
-            st.subheader("5️⃣ Verificación visual de imágenes y mapas")
-            st.caption("Se analiza cada página con imágenes usando IA para detectar inconsistencias visuales.")
-    
-            hallazgos_totales = []
-            for nombre, pdf_bytes in pdfs_con_imagenes.items():
-                tipo_doc = asignaciones.get(nombre, "DESCONOCIDO")
-                texto_doc = documentos_texto.get(nombre, "")
-                with st.spinner(f"Analizando imágenes en {nombre}..."):
-                    hallazgos = verificar_imagenes_pdf(pdf_bytes, texto_doc, tipo_doc, max_paginas=4)
-                for h in hallazgos:
-                    h["archivo"] = nombre
-                    hallazgos_totales.append(h)
-    
-            if not hallazgos_totales:
-                st.info("No se encontraron páginas con imágenes en los PDFs cargados.")
+            resultado = analizar_paquete(documentos_datos)
+            cotejo = resultado["cotejo"]
+            incoherencias = resultado["incoherencias"]
+            aritmetica = resultado["aritmetica"]
+
+            n_errores = sum(1 for f in cotejo if f["✓"] == "❌")
+            n_arit_errores = sum(1 for a in aritmetica if a["ok"] == "❌")
+
+            if n_errores == 0 and n_arit_errores == 0:
+                st.success("✅ No se detectaron inconsistencias. El paquete parece consistente.")
             else:
-                inconsistencias_visuales = [h for h in hallazgos_totales if h.get("inconsistencias")]
-                if inconsistencias_visuales:
-                    st.error(f"⚠️ Se encontraron **{sum(len(h['inconsistencias']) for h in inconsistencias_visuales)} inconsistencia(s) visual(es)**.")
+                st.error(f"❌ Se detectaron **{n_errores} inconsistencia(s)** entre documentos y **{n_arit_errores} error(es) aritmético(s)**.")
+
+            st.markdown("---")
+            st.subheader("2️⃣ Tabla de cotejo")
+
+            import pandas as pd
+            df = pd.DataFrame(cotejo)
+            df = df.rename(columns={
+                "dato": "Dato",
+                "consistente": "✓",
+                "Informe AF": "Informe AF",
+                "Plan Comp.": "Plan Comp.",
+            })
+
+            def colorear(val):
+                if val == "❌":
+                    return "background-color: #ffd6d6; color: #c0392b; font-weight: bold"
+                if val == "✅":
+                    return "background-color: #d6f5d6; color: #1e8449"
+                return ""
+
+            try:
+                styled = df.style.map(colorear, subset=["✓"])
+            except AttributeError:
+                styled = df.style.applymap(colorear, subset=["✓"])
+
+            st.dataframe(styled, width="stretch", hide_index=True)
+
+            if incoherencias:
+                st.markdown("---")
+                st.subheader("3️⃣ Detalle de inconsistencias")
+                for i, inc in enumerate(incoherencias, 1):
+                    with st.expander(f"❌ INCOHERENCIA #{i} — {inc['dato']}", expanded=True):
+                        for doc, val in inc["valores"].items():
+                            st.markdown(f"- **{doc}:** `{val}`")
+                        st.caption("Corrige el valor en el documento que tenga el error antes de radicar.")
+
+            if aritmetica:
+                st.markdown("---")
+                st.subheader("4️⃣ Verificación aritmética")
+                for a in aritmetica:
+                    st.markdown(
+                        f"{a['ok']} **{a['verificacion']}** — "
+                        f"{a['operacion']} → reportado: `{a['reportado']}`"
+                    )
+
+            # ── ANÁLISIS VISUAL DEL PAQUETE ───────────────────────────────────────
+            pdfs_con_imagenes = {
+                nombre: documentos_pdfbytes[nombre]
+                for nombre, tipo in asignaciones.items()
+                if nombre in documentos_pdfbytes
+            }
+
+            if pdfs_con_imagenes:
+                st.markdown("---")
+                st.subheader("5️⃣ Verificación visual de imágenes y mapas")
+                st.caption("Se analiza cada página con imágenes usando IA.")
+
+                hallazgos_totales = []
+                for nombre, pdf_bytes_doc in pdfs_con_imagenes.items():
+                    tipo_doc = asignaciones.get(nombre, "DESCONOCIDO")
+                    texto_doc = documentos_texto.get(nombre, "")
+                    with st.spinner(f"Analizando imágenes en {nombre}..."):
+                        hallazgos = verificar_imagenes_pdf(pdf_bytes_doc, texto_doc, tipo_doc, max_paginas=4)
+                    for h in hallazgos:
+                        h["archivo"] = nombre
+                        hallazgos_totales.append(h)
+
+                if not hallazgos_totales:
+                    st.info("No se encontraron páginas con imágenes en los PDFs cargados.")
                 else:
-                    st.success("✅ No se detectaron inconsistencias visuales.")
-    
-                for h in hallazgos_totales:
-                    tipo_icono = {"mapa": "🗺️", "tabla": "📊", "foto": "📷", "diagrama": "📐"}.get(h.get("tipo_imagen",""), "🖼️")
-                    coincide = h.get("coincide_con_texto")
-                    estado = "❌" if (coincide is False or h.get("inconsistencias")) else ("✅" if coincide else "ℹ️")
-    
-                    label = f"{estado} {tipo_icono} {h['archivo']} — Página {h.get('pagina','?')} ({h.get('tipo_imagen','?')})"
-                    with st.expander(label, expanded=bool(h.get("inconsistencias"))):
-                        st.markdown(f"**Descripción:** {h.get('descripcion','—')}")
-                        if h.get("municipio_visible"):
-                            st.markdown(f"**Municipio visible en imagen:** `{h['municipio_visible']}`")
-                        if h.get("departamento_visible"):
-                            st.markdown(f"**Departamento visible en imagen:** `{h['departamento_visible']}`")
-                        if h.get("inconsistencias"):
-                            st.markdown("**Inconsistencias detectadas:**")
-                            for inc in h["inconsistencias"]:
-                                st.markdown(f"- ⚠️ {inc}")
-                        st.caption(f"Confianza del análisis: {h.get('confianza','—')}")
-    
-        with st.expander("🔧 Ver valores extraídos por documento (debug)", expanded=False):
-            for tipo, datos in resultado["datos_crudos"].items():
-                st.markdown(f"**{LABELS.get(tipo, tipo)}**")
-                for k, v in datos.items():
-                    if v:
-                        st.markdown(f"- `{k}`: {v}")
+                    inc_visuales = [h for h in hallazgos_totales if h.get("inconsistencias")]
+                    if inc_visuales:
+                        st.error(f"⚠️ {sum(len(h['inconsistencias']) for h in inc_visuales)} inconsistencia(s) visual(es).")
+                    else:
+                        st.success("✅ Sin inconsistencias visuales.")
+
+                    for h in hallazgos_totales:
+                        tipo_icono = {"mapa": "🗺️", "tabla": "📊", "foto": "📷", "diagrama": "📐"}.get(h.get("tipo_imagen", ""), "🖼️")
+                        tiene_inc = bool(h.get("inconsistencias"))
+                        estado = "❌" if (h.get("coincide_con_texto") is False or tiene_inc) else ("✅" if h.get("coincide_con_texto") else "ℹ️")
+                        label = f"{estado} {tipo_icono} {h['archivo']} — Pág. {h.get('pagina','?')} ({h.get('tipo_imagen','?')})"
+                        with st.expander(label, expanded=tiene_inc):
+                            st.markdown(f"**Descripción:** {h.get('descripcion', '—')}")
+                            if h.get("municipio_visible"):
+                                st.markdown(f"**Municipio en imagen:** `{h['municipio_visible']}`")
+                            if h.get("departamento_visible"):
+                                st.markdown(f"**Departamento en imagen:** `{h['departamento_visible']}`")
+                            if tiene_inc:
+                                st.markdown("**Inconsistencias:**")
+                                for inc in h["inconsistencias"]:
+                                    st.markdown(f"- ⚠️ {inc}")
+                            st.caption(f"Confianza: {h.get('confianza', '—')}")
+
+            with st.expander("🔧 Ver valores extraídos por documento (debug)", expanded=False):
+                for tipo, datos in resultado["datos_crudos"].items():
+                    st.markdown(f"**{LABELS.get(tipo, tipo)}**")
+                    for k, v in datos.items():
+                        if v:
+                            st.markdown(f"- `{k}`: {v}")
