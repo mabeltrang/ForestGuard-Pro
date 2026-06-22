@@ -206,8 +206,8 @@ if uploaded_files:
     st.markdown("---")
     if st.button("🔍 Validar Paquete", type="primary"):
 
-        if len(documentos_datos) < 2:
-            st.warning("Sube al menos 2 documentos clasificados para comparar. Para revisar imágenes de un solo doc, usa el panel lateral.")
+        if not documentos_datos:
+            st.warning("No se pudo extraer información de los documentos cargados.")
         else:
             resultado = analizar_paquete(documentos_datos)
             cotejo = resultado["cotejo"]
@@ -230,9 +230,22 @@ if uploaded_files:
             df = df.rename(columns={
                 "dato": "Dato",
                 "consistente": "✓",
-                "Informe AF": "Informe AF",
-                "Plan Comp.": "Plan Comp.",
             })
+
+            # Quitar columnas de docs que no se cargaron (todas vacías o "—")
+            doc_cols = ["FUN", "Informe AF", "Plan Comp.", "Aptitud", "Costos", "Oficio"]
+            cols_con_datos = [
+                c for c in doc_cols
+                if c in df.columns and df[c].notna().any() and (df[c] != "—").any()
+            ]
+            cols_mostrar = ["Dato"] + cols_con_datos + ["✓"]
+            df = df[[c for c in cols_mostrar if c in df.columns]]
+
+            # Quitar filas donde ningún doc tiene datos
+            if cols_con_datos:
+                df = df[df[cols_con_datos].apply(
+                    lambda row: any(v and v != "—" for v in row), axis=1
+                )]
 
             def colorear(val):
                 if val == "❌":
@@ -241,12 +254,14 @@ if uploaded_files:
                     return "background-color: #d6f5d6; color: #1e8449"
                 return ""
 
-            try:
-                styled = df.style.map(colorear, subset=["✓"])
-            except AttributeError:
-                styled = df.style.applymap(colorear, subset=["✓"])
-
-            st.dataframe(styled, width="stretch", hide_index=True)
+            if df.empty:
+                st.info("No se encontraron campos reconocibles en el documento.")
+            else:
+                try:
+                    styled = df.style.map(colorear, subset=["✓"])
+                except AttributeError:
+                    styled = df.style.applymap(colorear, subset=["✓"])
+                st.dataframe(styled, width="stretch", hide_index=True)
 
             if incoherencias:
                 st.markdown("---")
