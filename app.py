@@ -1,10 +1,10 @@
-
 import streamlit as st
 import os
 import tempfile
 from extractor import extract_text_from_file
 from analyzer import clasificar_documento, extraer_fun, extraer_informe_af, \
     extraer_compensacion, extraer_aptitud_suelo, extraer_costos, extraer_oficio, analizar_paquete
+from vision_checker import verificar_imagenes_pdf
 
 # ---------------------------------------------------------------------------
 # CONFIGURACIÓN
@@ -81,19 +81,23 @@ st.subheader("1️⃣ Documentos detectados")
 documentos_texto = {}
 documentos_tipo = {}
 documentos_datos = {}
+documentos_pdfbytes = {}  # para análisis visual
 
 for file in uploaded_files:
     suffix = os.path.splitext(file.name)[1]
     tmp_path = None
     try:
+        raw_bytes = file.getbuffer()
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(file.getbuffer())
+            tmp.write(raw_bytes)
             tmp_path = tmp.name
 
         texto = extract_text_from_file(tmp_path)
         documentos_texto[file.name] = texto
         tipo = clasificar_documento(file.name, texto)
         documentos_tipo[file.name] = tipo
+        if suffix.lower() == ".pdf":
+            documentos_pdfbytes[file.name] = bytes(raw_bytes)
 
     except Exception as e:
         st.error(f"Error procesando {file.name}: {e}")
@@ -199,6 +203,55 @@ if st.button("🔍 Validar Paquete", type="primary"):
                 f"{a['ok']} **{a['verificacion']}** — "
                 f"{a['operacion']} → reportado: `{a['reportado']}`"
             )
+
+    # ── ANÁLISIS VISUAL DE IMÁGENES Y MAPAS ──────────────────────────────────
+    pdfs_con_imagenes = {
+        nombre: documentos_pdfbytes[nombre]
+        for nombre, tipo in asignaciones.items()
+        if nombre in documentos_pdfbytes
+    }
+
+    if pdfs_con_imagenes:
+        st.markdown("---")
+        st.subheader("5️⃣ Verificación visual de imágenes y mapas")
+        st.caption("Se analiza cada página con imágenes usando IA para detectar inconsistencias visuales.")
+
+        hallazgos_totales = []
+        for nombre, pdf_bytes in pdfs_con_imagenes.items():
+            tipo_doc = asignaciones.get(nombre, "DESCONOCIDO")
+            texto_doc = documentos_texto.get(nombre, "")
+            with st.spinner(f"Analizando imágenes en {nombre}..."):
+                hallazgos = verificar_imagenes_pdf(pdf_bytes, texto_doc, tipo_doc, max_paginas=4)
+            for h in hallazgos:
+                h["archivo"] = nombre
+                hallazgos_totales.append(h)
+
+        if not hallazgos_totales:
+            st.info("No se encontraron páginas con imágenes en los PDFs cargados.")
+        else:
+            inconsistencias_visuales = [h for h in hallazgos_totales if h.get("inconsistencias")]
+            if inconsistencias_visuales:
+                st.error(f"⚠️ Se encontraron **{sum(len(h['inconsistencias']) for h in inconsistencias_visuales)} inconsistencia(s) visual(es)**.")
+            else:
+                st.success("✅ No se detectaron inconsistencias visuales.")
+
+            for h in hallazgos_totales:
+                tipo_icono = {"mapa": "🗺️", "tabla": "📊", "foto": "📷", "diagrama": "📐"}.get(h.get("tipo_imagen",""), "🖼️")
+                coincide = h.get("coincide_con_texto")
+                estado = "❌" if (coincide is False or h.get("inconsistencias")) else ("✅" if coincide else "ℹ️")
+
+                label = f"{estado} {tipo_icono} {h['archivo']} — Página {h.get('pagina','?')} ({h.get('tipo_imagen','?')})"
+                with st.expander(label, expanded=bool(h.get("inconsistencias"))):
+                    st.markdown(f"**Descripción:** {h.get('descripcion','—')}")
+                    if h.get("municipio_visible"):
+                        st.markdown(f"**Municipio visible en imagen:** `{h['municipio_visible']}`")
+                    if h.get("departamento_visible"):
+                        st.markdown(f"**Departamento visible en imagen:** `{h['departamento_visible']}`")
+                    if h.get("inconsistencias"):
+                        st.markdown("**Inconsistencias detectadas:**")
+                        for inc in h["inconsistencias"]:
+                            st.markdown(f"- ⚠️ {inc}")
+                    st.caption(f"Confianza del análisis: {h.get('confianza','—')}")
 
     with st.expander("🔧 Ver valores extraídos por documento (debug)", expanded=False):
         for tipo, datos in resultado["datos_crudos"].items():
