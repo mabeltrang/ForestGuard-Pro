@@ -157,16 +157,22 @@ def verificar_imagenes_pdf(
 ) -> list[dict]:
     """
     Analiza las páginas con imágenes de un PDF y retorna hallazgos visuales.
-
-    Args:
-        pdf_bytes: contenido del PDF en bytes
-        texto_extraido: texto ya extraído del documento
-        tipo_doc: tipo de documento (FUN, INFORME_AF, etc.)
-        max_paginas: máximo de páginas a analizar (para controlar costo de API)
-
-    Returns:
-        Lista de dicts con hallazgos por página
+    Si el archivo no es un PDF real (ej: DOCX), retorna lista vacía con aviso.
     """
+    # Verificar header PDF
+    if not pdf_bytes[:4] == b'%PDF' and not pdf_bytes[:5] == b'%PDF-':
+        # Puede ser DOCX (header PK) u otro formato
+        return [{
+            "pagina": 0,
+            "tipo_imagen": "no_pdf",
+            "descripcion": "El archivo no es un PDF — el análisis visual de imágenes solo funciona con PDFs.",
+            "coincide_con_texto": None,
+            "inconsistencias": [],
+            "municipio_visible": None,
+            "departamento_visible": None,
+            "confianza": "baja"
+        }]
+
     try:
         paginas = _paginas_con_imagenes(pdf_bytes)
     except Exception:
@@ -175,7 +181,6 @@ def verificar_imagenes_pdf(
     if not paginas:
         return []
 
-    # Limitar páginas analizadas
     paginas = paginas[:max_paginas]
 
     hallazgos = []
@@ -185,7 +190,7 @@ def verificar_imagenes_pdf(
             hallazgos.append({
                 "pagina": idx + 1,
                 "tipo_imagen": "no_rasterizable",
-                "descripcion": "PyMuPDF no disponible — instala pymupdf para análisis visual",
+                "descripcion": "PyMuPDF no disponible — instala pymupdf para análisis visual.",
                 "coincide_con_texto": None,
                 "inconsistencias": [],
                 "municipio_visible": None,
