@@ -59,7 +59,70 @@ with st.sidebar:
     *(PDF, DOCX, XLSX)*
     """)
     st.markdown("---")
+
+    st.header("🖼️ Revisar imágenes de un doc")
+    st.caption("Sube un PDF para verificar que sus mapas e imágenes coincidan con el texto.")
+    pdf_vision = st.file_uploader(
+        "PDF a revisar",
+        type=["pdf"],
+        key="vision_single"
+    )
+    tipo_vision = st.selectbox(
+        "Tipo de documento",
+        ["INFORME_AF", "FUN", "COMPENSACION", "APTITUD", "COSTOS", "OFICIO"],
+        key="tipo_vision"
+    )
+    max_pags = st.slider("Máx. páginas a analizar", 1, 10, 4, key="max_pags_vision")
+    btn_vision = st.button("🔍 Analizar imágenes", key="btn_vision")
+    st.markdown("---")
     st.caption("Validación 100% local — sin API keys requeridas.")
+
+# ── ANÁLISIS VISUAL INDEPENDIENTE (sidebar) ──────────────────────────────────
+if pdf_vision and btn_vision:
+    from extractor import extract_text_from_file
+    import tempfile, os
+    st.markdown("---")
+    st.subheader(f"🖼️ Análisis visual — {pdf_vision.name}")
+
+    pdf_bytes = bytes(pdf_vision.getbuffer())
+    suffix = os.path.splitext(pdf_vision.name)[1]
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(pdf_bytes)
+        tmp_path = tmp.name
+    try:
+        texto_doc = extract_text_from_file(tmp_path)
+    finally:
+        os.remove(tmp_path)
+
+    with st.spinner("Analizando páginas con imágenes..."):
+        hallazgos = verificar_imagenes_pdf(pdf_bytes, texto_doc, tipo_vision, max_paginas=max_pags)
+
+    if not hallazgos:
+        st.info("No se encontraron páginas con imágenes en este PDF, o PyMuPDF no está instalado (`pip install pymupdf`).")
+    else:
+        n_inc = sum(1 for h in hallazgos if h.get("inconsistencias"))
+        if n_inc:
+            st.error(f"⚠️ {n_inc} página(s) con posibles inconsistencias visuales.")
+        else:
+            st.success("✅ Sin inconsistencias visuales detectadas.")
+
+        for h in hallazgos:
+            tipo_icono = {"mapa": "🗺️", "tabla": "📊", "foto": "📷", "diagrama": "📐"}.get(h.get("tipo_imagen", ""), "🖼️")
+            tiene_inc = bool(h.get("inconsistencias"))
+            estado = "❌" if (h.get("coincide_con_texto") is False or tiene_inc) else ("✅" if h.get("coincide_con_texto") else "ℹ️")
+            label = f"{estado} {tipo_icono} Página {h.get('pagina','?')} — {h.get('tipo_imagen','?')}"
+            with st.expander(label, expanded=tiene_inc):
+                st.markdown(f"**Descripción:** {h.get('descripcion', '—')}")
+                if h.get("municipio_visible"):
+                    st.markdown(f"**Municipio en imagen:** `{h['municipio_visible']}`")
+                if h.get("departamento_visible"):
+                    st.markdown(f"**Departamento en imagen:** `{h['departamento_visible']}`")
+                if tiene_inc:
+                    st.markdown("**Inconsistencias:**")
+                    for inc in h["inconsistencias"]:
+                        st.markdown(f"- ⚠️ {inc}")
+                st.caption(f"Confianza: {h.get('confianza', '—')}")
+    st.markdown("---")
 
 # Carga de archivos
 uploaded_files = st.file_uploader(
