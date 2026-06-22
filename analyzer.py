@@ -99,6 +99,56 @@ def _extraer_numero(patron: str, texto: str, flags=re.IGNORECASE) -> str | None:
     return val if val else None
 
 
+def _extraer_costo_compensacion_total(texto: str) -> str | None:
+    """
+    Extrae el costo TOTAL de compensación, evitando confundirlo con el valor
+    unitario por hectárea (ej: $16.000.000/ha o $16,000,000 por hectárea).
+
+    Busca en orden:
+    1. Patrones explícitos de TOTAL que no estén seguidos de '/ha' o 'por hectárea'
+    2. Última fila Total de la tabla de compensación
+    3. Formato 'COP $XX,XXX,XXX' que NO esté asociado a '/ha'
+    """
+    # Patrón 1: "Valor total compensación (3 años): $XX,XXX,XXX" o similar
+    for pat in [
+        r"valor\s+total\s+(?:de\s+la\s+)?compensaci[oó]n[^$\d]{0,80}\$\s*([\d][,\.\d]+)",
+        r"costo\s+total\s+(?:de\s+la\s+)?compensaci[oó]n[^$\d]{0,80}\$\s*([\d][,\.\d]+)",
+        r"total\s+compensaci[oó]n[^$\d]{0,60}\$\s*([\d][,\.\d]+)",
+        r"presupuesto\s+total[^$\d]{0,60}\$\s*([\d][,\.\d]+)",
+    ]:
+        m = re.search(pat, texto, re.IGNORECASE)
+        if m:
+            # Verificar que el valor NO esté seguido de "/ha" o "por hectárea"
+            pos_fin = m.end()
+            siguiente = texto[pos_fin: pos_fin + 30].lower()
+            if "/ha" not in siguiente and "por hect" not in siguiente and "hectárea" not in siguiente:
+                val = _cop_a_entero(m.group(1))
+                if val and int(val) > 1_000_000:  # filtrar valores unitarios menores
+                    return val
+
+    # Patrón 2: fila Total en tabla de compensación (última ocurrencia)
+    val = _extraer_cop_tabla_total(
+        texto,
+        r"[Vv]alor\s+total\s+compensaci[oó]n|[Tt]abla\s+\d+.*[Cc]ostos?\s+de\s+(?:reposici[oó]n|compensaci[oó]n)"
+    )
+    if val and int(val) > 1_000_000:
+        return val
+
+    # Patrón 3: "COP $XX,XXX,XXX" que no sea unitario
+    for m in re.finditer(r'COP\s*\$\s*([\d][,\.\d]+)', texto, re.IGNORECASE):
+        siguiente = texto[m.end(): m.end() + 30].lower()
+        if "/ha" not in siguiente and "por hect" not in siguiente:
+            val = _cop_a_entero(m.group(1))
+            if val and int(val) > 1_000_000:
+                return val
+
+    # Fallback: párrafo con "plan de reposición/compensación forestal corresponde"
+    return _extraer_cop_parrafo(
+        texto,
+        r"plan\s+de\s+(?:reposici[oó]n|compensaci[oó]n)\s+forestal\s+corresponde"
+    )
+
+
 def _extraer_texto(patron: str, texto: str, flags=re.IGNORECASE) -> str | None:
     m = re.search(patron, texto, flags)
     return m.group(1).strip() if m else None
@@ -242,16 +292,8 @@ def extraer_compensacion(texto: str) -> dict:
     )
 
     # Costo — "COP $34,320,000" o tabla Total
-    r["costo_compensacion"] = _extraer_cop_parrafo(
-        texto, r"costos?\s+y\s+presupuesto"
-    ) or _extraer_cop_tabla_total(
-        texto, r"[Vv]alor\s+total\s+compensaci[oó]n|[Tt]abla\s+\d+.*[Cc]ostos?\s+de\s+reposici[oó]n"
-    )
-    # Formato especial Plan Comp: "COP $34,320,000"
-    if not r["costo_compensacion"]:
-        m = re.search(r'COP\s*\$\s*([\d][,\.\d]+)', texto)
-        if m:
-            r["costo_compensacion"] = _cop_a_entero(m.group(1))
+    # Costo compensación — usa extractor robusto que ignora valores unitarios /ha
+    r["costo_compensacion"] = _extraer_costo_compensacion_total(texto)
 
     r["nombre_proyecto"] = _extraer_texto(
         r"(?:plan|programa)\s+de\s+compensaci[oó]n\s+([^\n]{5,80})", texto
@@ -320,13 +362,8 @@ def extraer_costos(texto: str) -> dict:
         )
 
     # Costo compensación — mismo patrón de párrafo que aprovechamiento
-    r["costo_compensacion"] = _extraer_cop_parrafo(
-        texto, r"costos?\s+de\s+la\s+compensaci[oó]n|plan\s+de\s+reposici[oó]n\s+forestal\s+corresponde"
-    )
-    if not r["costo_compensacion"]:
-        r["costo_compensacion"] = _extraer_cop_tabla_total(
-            texto, r"[Vv]alor\s+total\s+compensaci[oó]n"
-        )
+    # Costo compensación — usa extractor robusto que ignora valores unitarios /ha
+    r["costo_compensacion"] = _extraer_costo_compensacion_total(texto)
 
     # Costo instalación — "TOTAL VALOR DEL PROYECTO EN NÚMEROS = (A+B) | 495,705,000"
     r["costo_instalacion"] = _extraer_numero(
