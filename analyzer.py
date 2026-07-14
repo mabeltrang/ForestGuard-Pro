@@ -19,20 +19,34 @@ def _normalizar(texto: str) -> str:
     return re.sub(r"\s+", " ", texto.lower().strip())
 
 
+def _normalizar_num_str(val: str) -> str:
+    """
+    Normaliza un string numérico según la convención del usuario:
+    '.' = separador decimal, ',' = separador de miles.
+
+    - La coma SIEMPRE se elimina (separador de miles).
+    - Si queda más de un punto, son separadores de miles de otro sistema
+      (ej. '332.122.500') y se eliminan todos.
+    - Si queda un solo punto, es el separador decimal y se conserva
+      (ej. '2.771' m3 sigue siendo 2.771, no 2771).
+    """
+    val = val.strip()
+    val = val.replace(",", "")
+    if val.count(".") > 1:
+        val = val.replace(".", "")
+    return val
+
+
 def _cop_a_entero(val: str) -> str | None:
-    """Normaliza un valor monetario COP a entero sin separadores."""
+    """Normaliza un valor monetario COP a entero sin separadores ni centavos."""
     if not val:
         return None
-    # Quitar $ y espacios
     val = val.replace("$", "").strip()
-    # Detectar formato: si termina en ,XX o .XX (dos dígitos) es decimal
-    if re.search(r'[,\.]\d{2}$', val):
-        # Quitar separadores de miles y convertir decimal
-        val = re.sub(r'[,\.](?=\d{3})', '', val)  # quitar separadores de miles
-        val = re.sub(r'[,\.](\d{2})$', '', val)    # quitar centavos
-    else:
-        # Solo separadores de miles
-        val = val.replace(",", "").replace(".", "")
+    val = _normalizar_num_str(val)
+    if "." in val:
+        # Único punto restante = separador decimal (centavos) -> se descartan,
+        # el peso colombiano se maneja como entero.
+        val = val.split(".")[0]
     val = val.strip()
     return val if val.isdigit() else None
 
@@ -91,11 +105,7 @@ def _extraer_numero(patron: str, texto: str, flags=re.IGNORECASE) -> str | None:
     m = re.search(patron, texto, flags)
     if not m:
         return None
-    val = m.group(1).strip()
-    if re.search(r'[,\.]\d{2}$', val):
-        val = val.replace(".", "").replace(",", ".")
-    else:
-        val = val.replace(",", "").replace(".", "")
+    val = _normalizar_num_str(m.group(1).strip())
     return val if val else None
 
 
@@ -240,7 +250,7 @@ def extraer_informe_af(texto: str) -> dict:
     )
 
     potencias = re.findall(r"([\d,\.]+)\s*k[Ww][Pp]?\b", texto, re.IGNORECASE)
-    r["potencia_kwp"] = potencias[0].replace(",", ".") if potencias else None
+    r["potencia_kwp"] = _normalizar_num_str(potencias[0]) if potencias else None
 
     for nombre in ["afinia", "cens", "aire", "air-e", "enel", "celsia", "codensa", "epsa", "chec", "essa"]:
         if nombre in texto.lower():
@@ -312,7 +322,7 @@ def extraer_aptitud_suelo(texto: str) -> dict:
         r"[áa]rea[^\d]{0,30}([\d,\.]+)\s*(?:hect[áa]reas?|ha\b)", texto
     )
     potencias = re.findall(r"([\d,\.]+)\s*k[Ww][Pp]?\b", texto, re.IGNORECASE)
-    r["potencia_kwp"] = potencias[0].replace(",", ".") if potencias else None
+    r["potencia_kwp"] = _normalizar_num_str(potencias[0]) if potencias else None
 
     for nombre in ["afinia", "cens", "aire", "air-e", "enel", "celsia", "codensa", "epsa", "chec", "essa"]:
         if nombre in texto.lower():
@@ -392,7 +402,7 @@ def extraer_oficio(texto: str) -> dict:
         r["distribuidora"] = None
 
     potencias = re.findall(r"([\d,\.]+)\s*k[Ww][Pp]?\b", texto, re.IGNORECASE)
-    r["potencia_kwp"] = potencias[0].replace(",", ".") if potencias else None
+    r["potencia_kwp"] = _normalizar_num_str(potencias[0]) if potencias else None
 
     return r
 
