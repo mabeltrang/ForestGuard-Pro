@@ -10,6 +10,7 @@ import base64
 import json
 import re
 import io
+import os
 from pypdf import PdfReader
 
 
@@ -60,15 +61,82 @@ def _rasterizar_pagina(pdf_bytes: bytes, page_idx: int, dpi: int = 120) -> str |
 
 
 # ---------------------------------------------------------------------------
+# EXTRACCIÓN DE IMÁGENES EMBEBIDAS EN DOCX
+# ---------------------------------------------------------------------------
+
+def _extraer_imagenes_docx(docx_bytes: bytes, max_imagenes: int = 5) -> list[tuple[str, str]]:
+    """
+    Extrae las imágenes embebidas de un .docx (carpeta word/media/) y las
+    retorna como lista de (base64, media_type). Omite formatos vectoriales
+    (wmf/emf) que la API de visión no puede leer.
+    """
+    import zipfile
+    imagenes = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(docx_bytes)) as z:
+            media_files = sorted(n for n in z.namelist() if n.startswith("word/media/"))
+            for name in media_files:
+                ext = name.rsplit(".", 1)[-1].lower()
+                if ext == "png":
+                    media_type = "image/png"
+                elif ext in ("jpg", "jpeg"):
+                    media_type = "image/jpeg"
+                elif ext == "gif":
+                    media_type = "image/gif"
+                elif ext == "webp":
+                    media_type = "image/webp"
+                else:
+                    continue  # wmf/emf u otros formatos no soportados por la API
+                data = z.read(name)
+                imagenes.append((base64.b64encode(data).decode(), media_type))
+                if len(imagenes) >= max_imagenes:
+                    break
+    except Exception:
+        pass
+    return imagenes
+
+
+# ---------------------------------------------------------------------------
 # LLAMADA A LA API
 # ---------------------------------------------------------------------------
 
-def _llamar_api_vision(imagen_b64: str, contexto_texto: str, tipo_doc: str) -> dict:
+def _obtener_api_key() -> str | None:
+    """
+    Busca la API key de Anthropic primero en variables de entorno
+    (ANTHROPIC_API_KEY) y, si no está, en st.secrets (Streamlit Cloud).
+    """
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if key:
+        return key
+    try:
+        import streamlit as st
+        return st.secrets.get("ANTHROPIC_API_KEY")
+    except Exception:
+        return None
+
+
+def _llamar_api_vision(imagen_b64: str, contexto_texto: str, tipo_doc: str, media_type: str = "image/png") -> dict:
     """
     Llama a Claude con la imagen de la página y el texto extraído del documento.
     Retorna un dict con hallazgos.
     """
     import urllib.request
+
+    api_key = _obtener_api_key()
+    if not api_key:
+        return {
+            "tipo_imagen": "error",
+            "descripcion": (
+                "Falta configurar ANTHROPIC_API_KEY (variable de entorno o "
+                "st.secrets en Streamlit Cloud) — sin esto el análisis visual "
+                "nunca se ejecuta."
+            ),
+            "coincide_con_texto": None,
+            "inconsistencias": [],
+            "municipio_visible": None,
+            "departamento_visible": None,
+            "confianza": "baja"
+        }
 
     prompt = f"""Eres un auditor de documentos ambientales colombianos para proyectos de energía solar (minigranjas fotovoltaicas).
 
@@ -107,7 +175,7 @@ Responde SOLO con JSON sin backticks, con esta estructura exacta:
                     "type": "image",
                     "source": {
                         "type": "base64",
-                        "media_type": "image/png",
+                        "media_type": media_type,
                         "data": imagen_b64
                     }
                 },
@@ -122,6 +190,7 @@ Responde SOLO con JSON sin backticks, con esta estructura exacta:
         headers={
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
+            "x-api-key": api_key,
         },
         method="POST"
     )
@@ -157,15 +226,18 @@ def verificar_imagenes_pdf(
 ) -> list[dict]:
     """
     Analiza las páginas con imágenes de un PDF y retorna hallazgos visuales.
-    Si el archivo no es un PDF real (ej: DOCX), retorna lista vacía con aviso.
+    Si el archivo no es un PDF real (ej: DOCX), delega a la extracción de
+    imágenes embebidas de DOCX en vez de fallar.
     """
     # Verificar header PDF
     if not pdf_bytes[:4] == b'%PDF' and not pdf_bytes[:5] == b'%PDF-':
-        # Puede ser DOCX (header PK) u otro formato
+        # Si tiene header ZIP (PK), es un DOCX -> analizar imágenes embebidas
+        if pdf_bytes[:2] == b'PK':
+            return _analizar_imagenes_docx(pdf_bytes, texto_extraido, tipo_doc, max_paginas)
         return [{
             "pagina": 0,
-            "tipo_imagen": "no_pdf",
-            "descripcion": "El archivo no es un PDF — el análisis visual de imágenes solo funciona con PDFs.",
+            "tipo_imagen": "formato_no_soportado",
+            "descripcion": "El análisis visual solo soporta PDF y DOCX.",
             "coincide_con_texto": None,
             "inconsistencias": [],
             "municipio_visible": None,
@@ -204,3 +276,39 @@ def verificar_imagenes_pdf(
         hallazgos.append(resultado)
 
     return hallazgos
+
+
+def _analizar_imagenes_docx(
+    docx_bytes: bytes,
+    texto_extraido: str,
+    tipo_doc: str,
+    max_imagenes: int = 5
+) -> list[dict]:
+    """Extrae y analiza las imágenes embebidas (mapas, fotos, planos) de un DOCX."""
+    imagenes = _extraer_imagenes_docx(docx_bytes, max_imagenes)
+    if not imagenes:
+        return []
+
+    hallazgos = []
+    for i, (img_b64, media_type) in enumerate(imagenes):
+        resultado = _llamar_api_vision(img_b64, texto_extraido, tipo_doc, media_type)
+        resultado["pagina"] = i + 1
+        hallazgos.append(resultado)
+    return hallazgos
+
+
+def verificar_imagenes_documento(
+    doc_bytes: bytes,
+    texto_extraido: str,
+    tipo_doc: str,
+    nombre_archivo: str = "",
+    max_paginas: int = 5
+) -> list[dict]:
+    """
+    Punto de entrada único: decide por extensión si rasterizar PDF o
+    extraer imágenes embebidas de DOCX, y analiza cada una con la API de visión.
+    """
+    ext = nombre_archivo.lower().rsplit(".", 1)[-1] if "." in nombre_archivo else ""
+    if ext in ("docx", "doc") or (not ext and doc_bytes[:2] == b'PK'):
+        return _analizar_imagenes_docx(doc_bytes, texto_extraido, tipo_doc, max_paginas)
+    return verificar_imagenes_pdf(doc_bytes, texto_extraido, tipo_doc, max_paginas)
