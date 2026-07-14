@@ -4,6 +4,73 @@ from docx import Document
 import pandas as pd
 
 
+def _detectar_conteo_inventario(df_dict: dict) -> dict:
+    """
+    Detecta si alguna hoja del Excel es un inventario forestal (columnas tipo
+    ID, Nombre científico, CAP/DAP, Cobertura, etc.) y cuenta el número REAL
+    de árboles contando FILAS DE DATOS.
+
+    IMPORTANTE: el conteo nunca se basa en el valor de la columna ID (que
+    puede tener saltos, duplicados o no iniciar en 1) — se cuenta la columna
+    de Nombre científico/común como ancla, fila por fila, hasta la primera
+    fila vacía que indique el fin de la tabla.
+
+    Retorna {nombre_hoja: {"individuos": int, "volumen_m3": float|None}}.
+    """
+    resultados = {}
+    for sheet_name, df in df_dict.items():
+        header_idx = None
+        for i in range(min(15, len(df))):
+            fila = df.iloc[i].astype(str).str.strip().str.lower()
+            valores = set(fila.tolist())
+            if "id" in valores and any(
+                any(k in v for k in ["científico", "cientifico", "cap", "dap", "cobertura"])
+                for v in valores
+            ):
+                header_idx = i
+                break
+        if header_idx is None:
+            continue
+
+        header_row = [str(v).strip() for v in df.iloc[header_idx].tolist()]
+        header_row_lower = [v.lower() for v in header_row]
+        datos = df.iloc[header_idx + 1:]
+
+        # Columna ancla para contar individuos: nombre científico/común,
+        # NUNCA la columna ID (para no depender de sus valores).
+        col_ancla = None
+        for j, val in enumerate(header_row_lower):
+            if "científico" in val or "cientifico" in val or "nombre común" in val or "nombre comun" in val:
+                col_ancla = j
+                break
+        if col_ancla is None:
+            col_ancla = 1 if len(header_row) > 1 else 0
+
+        conteo = 0
+        for val in datos.iloc[:, col_ancla]:
+            if pd.isna(val) or str(val).strip() == "":
+                if conteo > 0:
+                    break
+                continue
+            conteo += 1
+
+        if conteo == 0:
+            continue
+
+        # Volumen total (VT), si existe la columna, sumado sobre las mismas
+        # filas contadas como individuos.
+        volumen_m3 = None
+        for j, val in enumerate(header_row_lower):
+            if val.startswith("vt ") or val == "vt" or "vt (m3)" in val:
+                serie_vt = pd.to_numeric(datos.iloc[:conteo, j], errors="coerce")
+                volumen_m3 = round(float(serie_vt.sum()), 3)
+                break
+
+        resultados[sheet_name] = {"individuos": conteo, "volumen_m3": volumen_m3}
+
+    return resultados
+
+
 def extract_text_from_file(file_path: str) -> str:
     ext = os.path.splitext(file_path)[1].lower()
     text = ""
@@ -20,9 +87,32 @@ def extract_text_from_file(file_path: str) -> str:
             text = extract_docx(file_path)
 
         elif ext in [".xlsx", ".xls"]:
+            # Detección de inventario forestal: se lee primero sin asumir
+            # encabezado (los inventarios suelen traer 3-4 filas de
+            # metadatos --proyecto, propietario, ubicación, fecha-- antes de
+            # la fila de columnas real) para ubicar la tabla y contar árboles
+            # por FILAS DE DATOS, nunca por el valor de la columna ID.
+            try:
+                df_dict_raw = pd.read_excel(file_path, sheet_name=None, header=None)
+                conteos = _detectar_conteo_inventario(df_dict_raw)
+            except Exception:
+                conteos = {}
+
             df_dict = pd.read_excel(file_path, sheet_name=None)
             for sheet_name, df in df_dict.items():
                 text += f"\n[Hoja: {sheet_name}]\n"
+                if sheet_name in conteos:
+                    info = conteos[sheet_name]
+                    text += (
+                        f"[INVENTARIO FORESTAL] Total de individuos arbóreos "
+                        f"contados en esta hoja (conteo de filas de datos, "
+                        f"NO el valor máximo de la columna ID): {info['individuos']}\n"
+                    )
+                    if info.get("volumen_m3") is not None:
+                        text += (
+                            f"[INVENTARIO FORESTAL] Volumen total (m3) sumado "
+                            f"de la columna VT: {info['volumen_m3']}\n"
+                        )
                 text += df.to_string(index=False) + "\n"
 
     except Exception as e:
