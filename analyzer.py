@@ -320,6 +320,22 @@ def extraer_compensacion(texto: str) -> dict:
         r"factor\s+de\s+reposici[oó]n[^\d]{0,20}(\d{1,2})", texto
     )
 
+    # Área de impacto (área a aprovechar) — debe coincidir con el área del
+    # predio reportada en el FUN, Informe AF y Aptitud del Suelo. NO confundir
+    # con el área a compensar (ATC), que es un valor distinto y mayor.
+    r["area_impacto"] = _extraer_numero(
+        r"[áa]rea\s+total\s+a\s+aprovechar\s*\(ha\)[^\d]{0,20}(\d[\d.,]*)", texto
+    ) or _extraer_numero(
+        r"[áa]rea\s+a\s+aprovechar\s+AT\(i\)[^\d]{0,30}(\d[\d.,]*)", texto
+    )
+
+    # Área total a compensar (ATC) — NO se coteja contra otros documentos
+    # (es un valor calculado propio del Plan de Compensación), se guarda
+    # solo como referencia/debug.
+    r["area_compensar_atc"] = _extraer_numero(
+        r"[áa]rea\s+total\s+a\s+compensar[^\d]{0,20}(\d[\d.,]*)", texto
+    )
+
     # Costo — "COP $34,320,000" o tabla Total
     # Costo compensación — usa extractor robusto que ignora valores unitarios /ha
     r["costo_compensacion"] = _extraer_costo_compensacion_total(texto)
@@ -426,6 +442,34 @@ def extraer_oficio(texto: str) -> dict:
     return r
 
 
+def extraer_inventario(texto: str) -> dict:
+    """
+    Inventario forestal (Excel o PDF con tabla de individuos: ID, especie,
+    CAP/DAP, etc.).
+
+    El número de individuos se toma del conteo de FILAS DE DATOS que hace
+    extract_text_from_file() (marcado con la línea '[INVENTARIO FORESTAL]
+    Total de individuos...'). Ese conteo cuenta cada fila real de la tabla,
+    NUNCA a partir del valor máximo o último de la columna ID, que puede
+    tener saltos, duplicados o no iniciar en 1.
+    """
+    r = {}
+
+    r["individuos"] = _extraer_numero(
+        r"\[INVENTARIO FORESTAL\]\s*Total\s+de\s+individuos\s+ar[bó]óreos[^\d]*?(\d+)",
+        texto
+    )
+    r["volumen_m3"] = _extraer_numero(
+        r"\[INVENTARIO FORESTAL\]\s*Volumen\s+total\s*\(m3\)[^\d]*?(\d[\d.,]*)",
+        texto
+    )
+    r["nombre_proyecto"] = _extraer_texto(
+        r"PROYECTO[:\s]+([^\n]{1,60}?)(?:\s{2,}|Unnamed|$)", texto
+    )
+
+    return r
+
+
 # ---------------------------------------------------------------------------
 # CLASIFICACIÓN
 # ---------------------------------------------------------------------------
@@ -439,6 +483,11 @@ TIPOS = {
         "informe de aprovechamiento", "plan de aprovechamiento",
         "documento técnico para el aprovechamiento",
         "factor de reposición", "árboles aislados", "costos de aprovechamiento"
+    ],
+    "INVENTARIO": [
+        "inventario forestal", "[inventario forestal]", "cap a (cm)",
+        "dap a (m)", "nombre científico", "área de copa", "estado fitosanitario",
+        "diámetro de copa"
     ],
     "COMPENSACION": [
         "plan de compensación", "plan de reposición", "programa de compensación",
@@ -512,6 +561,7 @@ def _fmt(val) -> str:
 def analizar_paquete(documentos: dict) -> dict:
     fun  = documentos.get("FUN", {})
     af   = documentos.get("INFORME_AF", {})
+    inv  = documentos.get("INVENTARIO", {})
     comp = documentos.get("COMPENSACION", {})
     apt  = documentos.get("APTITUD", {})
     cos  = documentos.get("COSTOS", {})
@@ -542,6 +592,7 @@ def analizar_paquete(documentos: dict) -> dict:
             "dato": dato,
             "FUN": _fmt(vals.get("FUN")),
             "Informe AF": _fmt(vals.get("Informe AF")),
+            "Inventario": _fmt(vals.get("Inventario")),
             "Plan Comp.": _fmt(vals.get("Plan Comp.")),
             "Aptitud": _fmt(vals.get("Aptitud")),
             "Costos": _fmt(vals.get("Costos")),
@@ -559,12 +610,14 @@ def analizar_paquete(documentos: dict) -> dict:
     fila("Individuos a aprovechar", {
         "FUN": fun.get("individuos"),
         "Informe AF": af.get("individuos"),
+        "Inventario": inv.get("individuos"),
         "Aptitud": apt.get("individuos"),
         "Costos": cos.get("individuos"),
         "Oficio": ofi.get("individuos"),
     })
     fila("Volumen aprovechamiento (m³)", {
         "Informe AF": af.get("volumen_m3"),
+        "Inventario": inv.get("volumen_m3"),
         "Costos": cos.get("volumen_m3"),
     })
     fila("Individuos a reponer", {
@@ -575,6 +628,7 @@ def analizar_paquete(documentos: dict) -> dict:
     fila("Área del predio (ha)", {
         "FUN": fun.get("area_ha"),
         "Informe AF": af.get("area_ha"),
+        "Plan Comp.": comp.get("area_impacto"),
         "Aptitud": apt.get("area_ha"),
     })
     fila("Potencia del proyecto (kWp)", {
