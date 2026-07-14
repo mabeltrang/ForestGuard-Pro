@@ -4,7 +4,6 @@ import tempfile
 from extractor import extract_text_from_file
 from analyzer import clasificar_documento, extraer_fun, extraer_informe_af, \
     extraer_compensacion, extraer_aptitud_suelo, extraer_costos, extraer_oficio, analizar_paquete
-from vision_checker import verificar_imagenes_documento
 
 # ---------------------------------------------------------------------------
 # CONFIGURACIÓN
@@ -59,70 +58,7 @@ with st.sidebar:
     *(PDF, DOCX, XLSX)*
     """)
     st.markdown("---")
-
-    st.header("🖼️ Revisar imágenes de un doc")
-    st.caption("Sube un PDF para verificar que sus mapas e imágenes coincidan con el texto.")
-    pdf_vision = st.file_uploader(
-        "PDF a revisar",
-        type=["pdf", "docx", "doc"],
-        key="vision_single"
-    )
-    tipo_vision = st.selectbox(
-        "Tipo de documento",
-        ["INFORME_AF", "FUN", "COMPENSACION", "APTITUD", "COSTOS", "OFICIO"],
-        key="tipo_vision"
-    )
-    max_pags = st.slider("Máx. páginas a analizar", 1, 10, 4, key="max_pags_vision")
-    btn_vision = st.button("🔍 Analizar imágenes", key="btn_vision")
-    st.markdown("---")
-    st.caption("Cotejo de datos: 100% local. Análisis visual de imágenes: requiere ANTHROPIC_API_KEY configurada.")
-
-# ── ANÁLISIS VISUAL INDEPENDIENTE (sidebar) ──────────────────────────────────
-if pdf_vision and btn_vision:
-    from extractor import extract_text_from_file
-    import tempfile, os
-    st.markdown("---")
-    st.subheader(f"🖼️ Análisis visual — {pdf_vision.name}")
-
-    pdf_bytes = bytes(pdf_vision.getbuffer())
-    suffix = os.path.splitext(pdf_vision.name)[1]
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(pdf_bytes)
-        tmp_path = tmp.name
-    try:
-        texto_doc = extract_text_from_file(tmp_path)
-    finally:
-        os.remove(tmp_path)
-
-    with st.spinner("Analizando páginas con imágenes..."):
-        hallazgos = verificar_imagenes_documento(pdf_bytes, texto_doc, tipo_vision, nombre_archivo=pdf_vision.name, max_paginas=max_pags)
-
-    if not hallazgos:
-        st.info("No se encontraron páginas con imágenes en este PDF, o PyMuPDF no está instalado (`pip install pymupdf`).")
-    else:
-        n_inc = sum(1 for h in hallazgos if h.get("inconsistencias"))
-        if n_inc:
-            st.error(f"⚠️ {n_inc} página(s) con posibles inconsistencias visuales.")
-        else:
-            st.success("✅ Sin inconsistencias visuales detectadas.")
-
-        for h in hallazgos:
-            tipo_icono = {"mapa": "🗺️", "tabla": "📊", "foto": "📷", "diagrama": "📐"}.get(h.get("tipo_imagen", ""), "🖼️")
-            tiene_inc = bool(h.get("inconsistencias"))
-            estado = "❌" if (h.get("coincide_con_texto") is False or tiene_inc) else ("✅" if h.get("coincide_con_texto") else "ℹ️")
-            label = f"{estado} {tipo_icono} Página {h.get('pagina','?')} — {h.get('tipo_imagen','?')}"
-            with st.expander(label, expanded=tiene_inc):
-                st.markdown(f"**Descripción:** {h.get('descripcion', '—')}")
-                if h.get("municipio_visible"):
-                    st.markdown(f"**Municipio en imagen:** `{h['municipio_visible']}`")
-                if h.get("departamento_visible"):
-                    st.markdown(f"**Departamento en imagen:** `{h['departamento_visible']}`")
-                if tiene_inc:
-                    st.markdown("**Inconsistencias:**")
-                    for inc in h["inconsistencias"]:
-                        st.markdown(f"- ⚠️ {inc}")
-                st.caption(f"Confianza: {h.get('confianza', '—')}")
-    st.markdown("---")
+    st.caption("Validación 100% local — sin API keys ni servicios externos.")
 
 # Carga de archivos
 uploaded_files = st.file_uploader(
@@ -132,7 +68,7 @@ uploaded_files = st.file_uploader(
 )
 
 if not uploaded_files:
-    st.info("👆 Sube los documentos del paquete para validar, o usa el panel lateral para revisar imágenes de un doc.")
+    st.info("👆 Sube los documentos del paquete para validar.")
 
 # ---------------------------------------------------------------------------
 if uploaded_files:
@@ -140,12 +76,11 @@ if uploaded_files:
     # ---------------------------------------------------------------------------
     st.markdown("---")
     st.subheader("1️⃣ Documentos detectados")
-    
+
     documentos_texto = {}
     documentos_tipo = {}
     documentos_datos = {}
-    documentos_pdfbytes = {}  # para análisis visual
-    
+
     for file in uploaded_files:
         suffix = os.path.splitext(file.name)[1]
         tmp_path = None
@@ -154,14 +89,12 @@ if uploaded_files:
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                 tmp.write(raw_bytes)
                 tmp_path = tmp.name
-    
+
             texto = extract_text_from_file(tmp_path)
             documentos_texto[file.name] = texto
             tipo = clasificar_documento(file.name, texto)
             documentos_tipo[file.name] = tipo
-            if suffix.lower() in (".pdf", ".docx", ".doc"):
-                documentos_pdfbytes[file.name] = bytes(raw_bytes)
-    
+
         except Exception as e:
             st.error(f"Error procesando {file.name}: {e}")
             documentos_tipo[file.name] = "DESCONOCIDO"
@@ -169,17 +102,17 @@ if uploaded_files:
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 os.remove(tmp_path)
-    
+
     # Clasificación con corrección manual
     tipo_opciones = ["FUN", "INFORME_AF", "COMPENSACION", "APTITUD", "COSTOS", "OFICIO", "DESCONOCIDO"]
     asignaciones = {}
-    
+
     cols = st.columns([3, 2])
     with cols[0]:
         st.markdown("**Archivo**")
     with cols[1]:
         st.markdown("**Tipo detectado** (puedes corregir)")
-    
+
     for nombre, tipo_auto in documentos_tipo.items():
         c1, c2 = st.columns([3, 2])
         with c1:
@@ -194,12 +127,12 @@ if uploaded_files:
                 label_visibility="collapsed"
             )
             asignaciones[nombre] = tipo_final
-    
+
     for nombre, tipo in asignaciones.items():
         if tipo in EXTRACTORES and documentos_texto.get(nombre):
             datos = EXTRACTORES[tipo](documentos_texto[nombre])
             documentos_datos[tipo] = datos
-    
+
     # ---------------------------------------------------------------------------
     # VALIDACIÓN
     # ---------------------------------------------------------------------------
@@ -280,54 +213,6 @@ if uploaded_files:
                         f"{a['ok']} **{a['verificacion']}** — "
                         f"{a['operacion']} → reportado: `{a['reportado']}`"
                     )
-
-            # ── ANÁLISIS VISUAL DEL PAQUETE ───────────────────────────────────────
-            pdfs_con_imagenes = {
-                nombre: documentos_pdfbytes[nombre]
-                for nombre, tipo in asignaciones.items()
-                if nombre in documentos_pdfbytes
-            }
-
-            if pdfs_con_imagenes:
-                st.markdown("---")
-                st.subheader("5️⃣ Verificación visual de imágenes y mapas")
-                st.caption("Se analiza cada página con imágenes usando IA.")
-
-                hallazgos_totales = []
-                for nombre, pdf_bytes_doc in pdfs_con_imagenes.items():
-                    tipo_doc = asignaciones.get(nombre, "DESCONOCIDO")
-                    texto_doc = documentos_texto.get(nombre, "")
-                    with st.spinner(f"Analizando imágenes en {nombre}..."):
-                        hallazgos = verificar_imagenes_documento(pdf_bytes_doc, texto_doc, tipo_doc, nombre_archivo=nombre, max_paginas=4)
-                    for h in hallazgos:
-                        h["archivo"] = nombre
-                        hallazgos_totales.append(h)
-
-                if not hallazgos_totales:
-                    st.info("No se encontraron páginas con imágenes en los PDFs cargados.")
-                else:
-                    inc_visuales = [h for h in hallazgos_totales if h.get("inconsistencias")]
-                    if inc_visuales:
-                        st.error(f"⚠️ {sum(len(h['inconsistencias']) for h in inc_visuales)} inconsistencia(s) visual(es).")
-                    else:
-                        st.success("✅ Sin inconsistencias visuales.")
-
-                    for h in hallazgos_totales:
-                        tipo_icono = {"mapa": "🗺️", "tabla": "📊", "foto": "📷", "diagrama": "📐"}.get(h.get("tipo_imagen", ""), "🖼️")
-                        tiene_inc = bool(h.get("inconsistencias"))
-                        estado = "❌" if (h.get("coincide_con_texto") is False or tiene_inc) else ("✅" if h.get("coincide_con_texto") else "ℹ️")
-                        label = f"{estado} {tipo_icono} {h['archivo']} — Pág. {h.get('pagina','?')} ({h.get('tipo_imagen','?')})"
-                        with st.expander(label, expanded=tiene_inc):
-                            st.markdown(f"**Descripción:** {h.get('descripcion', '—')}")
-                            if h.get("municipio_visible"):
-                                st.markdown(f"**Municipio en imagen:** `{h['municipio_visible']}`")
-                            if h.get("departamento_visible"):
-                                st.markdown(f"**Departamento en imagen:** `{h['departamento_visible']}`")
-                            if tiene_inc:
-                                st.markdown("**Inconsistencias:**")
-                                for inc in h["inconsistencias"]:
-                                    st.markdown(f"- ⚠️ {inc}")
-                            st.caption(f"Confianza: {h.get('confianza', '—')}")
 
             with st.expander("🔧 Ver valores extraídos por documento (debug)", expanded=False):
                 for tipo, datos in resultado["datos_crudos"].items():
