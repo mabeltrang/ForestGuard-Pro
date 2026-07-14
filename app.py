@@ -4,7 +4,7 @@ import tempfile
 from extractor import extract_text_from_file
 from analyzer import clasificar_documento, extraer_fun, extraer_informe_af, \
     extraer_compensacion, extraer_aptitud_suelo, extraer_costos, extraer_oficio, analizar_paquete
-from vision_checker import verificar_imagenes_pdf
+from vision_checker import verificar_imagenes_documento
 
 # ---------------------------------------------------------------------------
 # CONFIGURACIÓN
@@ -75,7 +75,7 @@ with st.sidebar:
     max_pags = st.slider("Máx. páginas a analizar", 1, 10, 4, key="max_pags_vision")
     btn_vision = st.button("🔍 Analizar imágenes", key="btn_vision")
     st.markdown("---")
-    st.caption("Validación 100% local — sin API keys requeridas.")
+    st.caption("Cotejo de datos: 100% local. Análisis visual de imágenes: requiere ANTHROPIC_API_KEY configurada.")
 
 # ── ANÁLISIS VISUAL INDEPENDIENTE (sidebar) ──────────────────────────────────
 if pdf_vision and btn_vision:
@@ -95,7 +95,7 @@ if pdf_vision and btn_vision:
         os.remove(tmp_path)
 
     with st.spinner("Analizando páginas con imágenes..."):
-        hallazgos = verificar_imagenes_pdf(pdf_bytes, texto_doc, tipo_vision, max_paginas=max_pags)
+        hallazgos = verificar_imagenes_documento(pdf_bytes, texto_doc, tipo_vision, nombre_archivo=pdf_vision.name, max_paginas=max_pags)
 
     if not hallazgos:
         st.info("No se encontraron páginas con imágenes en este PDF, o PyMuPDF no está instalado (`pip install pymupdf`).")
@@ -159,7 +159,7 @@ if uploaded_files:
             documentos_texto[file.name] = texto
             tipo = clasificar_documento(file.name, texto)
             documentos_tipo[file.name] = tipo
-            if suffix.lower() == ".pdf":
+            if suffix.lower() in (".pdf", ".docx", ".doc"):
                 documentos_pdfbytes[file.name] = bytes(raw_bytes)
     
         except Exception as e:
@@ -298,7 +298,7 @@ if uploaded_files:
                     tipo_doc = asignaciones.get(nombre, "DESCONOCIDO")
                     texto_doc = documentos_texto.get(nombre, "")
                     with st.spinner(f"Analizando imágenes en {nombre}..."):
-                        hallazgos = verificar_imagenes_pdf(pdf_bytes_doc, texto_doc, tipo_doc, max_paginas=4)
+                        hallazgos = verificar_imagenes_documento(pdf_bytes_doc, texto_doc, tipo_doc, nombre_archivo=nombre, max_paginas=4)
                     for h in hallazgos:
                         h["archivo"] = nombre
                         hallazgos_totales.append(h)
