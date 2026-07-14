@@ -3,7 +3,8 @@ import os
 import tempfile
 from extractor import extract_text_from_file
 from analyzer import clasificar_documento, extraer_fun, extraer_informe_af, \
-    extraer_compensacion, extraer_aptitud_suelo, extraer_costos, extraer_oficio, analizar_paquete
+    extraer_compensacion, extraer_aptitud_suelo, extraer_costos, extraer_oficio, \
+    extraer_inventario, analizar_paquete
 
 # ---------------------------------------------------------------------------
 # CONFIGURACIÓN
@@ -17,6 +18,7 @@ st.set_page_config(
 EXTRACTORES = {
     "FUN": extraer_fun,
     "INFORME_AF": extraer_informe_af,
+    "INVENTARIO": extraer_inventario,
     "COMPENSACION": extraer_compensacion,
     "APTITUD": extraer_aptitud_suelo,
     "COSTOS": extraer_costos,
@@ -26,6 +28,7 @@ EXTRACTORES = {
 LABELS = {
     "FUN": "📋 FUN",
     "INFORME_AF": "🌳 Informe AF",
+    "INVENTARIO": "🌲 Inventario Forestal",
     "COMPENSACION": "🌱 Plan Compensación",
     "APTITUD": "🗺️ Aptitud Suelo",
     "COSTOS": "💰 Costos",
@@ -50,6 +53,7 @@ with st.sidebar:
     **Documentos soportados:**
     - Formato Único Nacional (FUN)
     - Informe de Aprovechamiento Forestal
+    - Inventario Forestal (Excel o PDF)
     - Plan de Compensación *(separado o dentro del AF)*
     - Informe de Aptitud del Suelo
     - Costos y Presupuesto
@@ -104,7 +108,7 @@ if uploaded_files:
                 os.remove(tmp_path)
 
     # Clasificación con corrección manual
-    tipo_opciones = ["FUN", "INFORME_AF", "COMPENSACION", "APTITUD", "COSTOS", "OFICIO", "DESCONOCIDO"]
+    tipo_opciones = ["FUN", "INFORME_AF", "INVENTARIO", "COMPENSACION", "APTITUD", "COSTOS", "OFICIO", "DESCONOCIDO"]
     asignaciones = {}
 
     cols = st.columns([3, 2])
@@ -118,7 +122,7 @@ if uploaded_files:
         with c1:
             st.write(f"📎 {nombre}")
         with c2:
-            idx = tipo_opciones.index(tipo_auto) if tipo_auto in tipo_opciones else 5
+            idx = tipo_opciones.index(tipo_auto) if tipo_auto in tipo_opciones else tipo_opciones.index("DESCONOCIDO")
             tipo_final = st.selectbox(
                 label=f"Tipo para {nombre}",
                 options=tipo_opciones,
@@ -166,7 +170,7 @@ if uploaded_files:
             })
 
             # Quitar columnas de docs que no se cargaron (todas vacías o "—")
-            doc_cols = ["FUN", "Informe AF", "Plan Comp.", "Aptitud", "Costos", "Oficio"]
+            doc_cols = ["FUN", "Informe AF", "Inventario", "Plan Comp.", "Aptitud", "Costos", "Oficio"]
             cols_con_datos = [
                 c for c in doc_cols
                 if c in df.columns and df[c].notna().any() and (df[c] != "—").any()
