@@ -115,10 +115,24 @@ def _extraer_costo_compensacion_total(texto: str) -> str | None:
     unitario por hectárea (ej: $16.000.000/ha o $16,000,000 por hectárea).
 
     Busca en orden:
+    0. Patrón explícito "TOTAL INVERSIÓN DEL PLAN" (el más confiable, usado en
+       las plantillas de Costos y Presupuesto).
     1. Patrones explícitos de TOTAL que no estén seguidos de '/ha' o 'por hectárea'
     2. Última fila Total de la tabla de compensación
     3. Formato 'COP $XX,XXX,XXX' que NO esté asociado a '/ha'
     """
+    # Patrón 0: "TOTAL INVERSIÓN DEL PLAN $ 41,366,592.00" — el total real y
+    # explícito del presupuesto, siempre debe preferirse sobre cualquier valor
+    # unitario o por hectárea que aparezca antes en el texto.
+    m0 = re.search(
+        r"TOTAL\s+INVERSI[OÓ]N\s+DEL\s+PLAN[^\d]{0,20}\$?\s*([\d][,\.\d]+)",
+        texto, re.IGNORECASE
+    )
+    if m0:
+        val = _cop_a_entero(m0.group(1))
+        if val and int(val) > 1_000_000:
+            return val
+
     # Patrón 1: "Valor total compensación (3 años): $XX,XXX,XXX" o similar
     for pat in [
         r"valor\s+total\s+(?:de\s+la\s+)?compensaci[oó]n[^$\d]{0,80}\$\s*([\d][,\.\d]+)",
@@ -128,9 +142,14 @@ def _extraer_costo_compensacion_total(texto: str) -> str | None:
     ]:
         m = re.search(pat, texto, re.IGNORECASE)
         if m:
-            # Verificar que el valor NO esté seguido de "/ha" o "por hectárea"
+            # Verificar que el valor NO esté seguido de "/ha" o "por hectárea".
+            # Se normalizan los espacios en blanco (incluyendo saltos de línea)
+            # antes de comparar, porque el texto extraído de PDF frecuentemente
+            # parte "por hectárea" en dos líneas ("por \nhectárea"), lo que
+            # antes hacía que el filtro de exclusión no detectara el valor
+            # unitario y lo confundiera con el total.
             pos_fin = m.end()
-            siguiente = texto[pos_fin: pos_fin + 30].lower()
+            siguiente = _normalizar(texto[pos_fin: pos_fin + 40])
             if "/ha" not in siguiente and "por hect" not in siguiente and "hectárea" not in siguiente:
                 val = _cop_a_entero(m.group(1))
                 if val and int(val) > 1_000_000:  # filtrar valores unitarios menores
@@ -146,7 +165,7 @@ def _extraer_costo_compensacion_total(texto: str) -> str | None:
 
     # Patrón 3: "COP $XX,XXX,XXX" que no sea unitario
     for m in re.finditer(r'COP\s*\$\s*([\d][,\.\d]+)', texto, re.IGNORECASE):
-        siguiente = texto[m.end(): m.end() + 30].lower()
+        siguiente = _normalizar(texto[m.end(): m.end() + 40])
         if "/ha" not in siguiente and "por hect" not in siguiente:
             val = _cop_a_entero(m.group(1))
             if val and int(val) > 1_000_000:
