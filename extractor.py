@@ -147,6 +147,14 @@ def iter_blocks(doc):
     Itera párrafos y tablas del documento en el orden real del XML.
     python-docx expone doc.paragraphs y doc.tables por separado,
     pero aquí los entregamos en el orden que aparecen en el documento.
+
+    También desciende dentro de cuadros de texto (text boxes / shapes con
+    <w:txbxContent>), ya que python-docx NO los recorre —ni con .paragraphs
+    ni con .tables, incluso estando dentro de una celda de tabla—. Esto es
+    crítico porque varios formatos reales (ej. la tabla de especies del FUN)
+    están pegados dentro de un cuadro de texto flotante en vez de ir directo
+    en la celda, y sin este recorrido manual esos datos quedan invisibles
+    para el extractor (regresa "—" aunque el dato sí esté en el documento).
     """
     from docx.oxml.ns import qn
     body = doc.element.body
@@ -157,10 +165,55 @@ def iter_blocks(doc):
         if tag == "p":
             from docx.text.paragraph import Paragraph
             yield {"type": "paragraph", "text": Paragraph(child, doc).text}
+            yield from _iter_textbox_blocks(child, doc)
 
         elif tag == "tbl":
             from docx.table import Table
             yield {"type": "table", "table": Table(child, doc)}
+            # Los cuadros de texto pueden estar pegados dentro de una CELDA
+            # de esta tabla (no solo sueltos en el cuerpo del documento), así
+            # que se busca en todo el árbol de la tabla, a cualquier profundidad.
+            yield from _iter_textbox_blocks(child, doc)
+
+
+_MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+_MC_CHOICE = f"{{{_MC_NS}}}Choice"
+
+
+def _iter_textbox_blocks(element, doc):
+    """
+    Recorre cuadros de texto (<w:txbxContent>) anidados en cualquier parte
+    de `element` y entrega sus párrafos/tablas como bloques normales.
+
+    Word duplica el contenido de cada cuadro de texto dos veces por
+    compatibilidad: una copia moderna DrawingML dentro de <mc:Choice> y una
+    copia legada VML dentro de <mc:Fallback> con el mismo texto. Aquí solo
+    se procesa la copia de <mc:Choice> para no extraer el texto duplicado;
+    si el documento no usa <mc:AlternateContent> (poco común), se recorre
+    <w:txbxContent> directamente como respaldo.
+    """
+    from docx.oxml.ns import qn
+    from docx.text.paragraph import Paragraph
+    from docx.table import Table
+
+    def _blocks_from_txbx(txbx):
+        for sub in txbx:
+            subtag = sub.tag.split("}")[-1] if "}" in sub.tag else sub.tag
+            if subtag == "p":
+                txt = Paragraph(sub, doc).text.strip()
+                if txt:
+                    yield {"type": "paragraph", "text": txt}
+            elif subtag == "tbl":
+                yield {"type": "table", "table": Table(sub, doc)}
+
+    choices = list(element.iter(_MC_CHOICE))
+    if choices:
+        for choice in choices:
+            for txbx in choice.iter(qn("w:txbxContent")):
+                yield from _blocks_from_txbx(txbx)
+    else:
+        for txbx in element.iter(qn("w:txbxContent")):
+            yield from _blocks_from_txbx(txbx)
 
 
 def _table_to_text(table) -> str:
@@ -184,8 +237,15 @@ def _table_to_text(table) -> str:
         return ""
 
     lines = []
-    # Si primera fila tiene texto en todas las celdas → encabezado
-    header = rows[0] if all(h for h in rows[0]) else None
+    # Tablas de 2 columnas son casi siempre pares "etiqueta: valor" verticales
+    # (una fila = un dato), NUNCA encabezado + datos. Tratar la fila 0 como
+    # encabezado en ese caso reordena mal los pares label:valor de TODAS las
+    # filas siguientes (ej. "Área total a aprovechar (ha) | 2.070" pasaría a
+    # leerse como "Nombre del proyecto: Área total a aprovechar (ha)"),
+    # haciendo que el regex enganche números de otra celda por accidente.
+    # Solo se asume encabezado con 3+ columnas (tablas horizontales reales).
+    ancho = max(len(r) for r in rows)
+    header = rows[0] if ancho > 2 and all(h for h in rows[0]) else None
 
     for i, row in enumerate(rows):
         if header and i == 0:
