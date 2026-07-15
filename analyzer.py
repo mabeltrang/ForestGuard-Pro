@@ -616,6 +616,7 @@ def analizar_paquete(documentos: dict) -> dict:
         "Oficio": ofi.get("individuos"),
     })
     fila("Volumen aprovechamiento (m³)", {
+        "FUN": fun.get("volumen_m3"),
         "Informe AF": af.get("volumen_m3"),
         "Inventario": inv.get("volumen_m3"),
         "Costos": cos.get("volumen_m3"),
