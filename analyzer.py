@@ -18,6 +18,23 @@ import re
 COSTO_INSTALACION_POR_MINIGRANJA = 495_705_000
 
 
+def _extraer_nombre_proyecto(texto: str) -> str | None:
+    """
+    Extrae el nombre/código del proyecto (ej. 'TAMALAMEQUE ORIENTE T862') a
+    partir de menciones tipo 'Minigranja(s) Solar(es) X' en el texto. Se usa
+    el mismo patrón para todos los documentos porque todos narran el proyecto
+    con esta misma frase (a diferencia del FUN, que es un formato de
+    variables y no menciona el nombre comercial del proyecto en ningún lado
+    — para el FUN es normal y correcto que devuelva None).
+    """
+    patron = r'minigranjas?\s+(?:solar(?:es)?\s+)?([A-ZÁÉÍÓÚÑ0-9][^\n"”»,\.]{2,60}?)(?=["”»,\.\n]|\s+en\s+el|\s+consiste|\s+ubicad|\s{2,})'
+    m = re.search(patron, texto, re.IGNORECASE)
+    if not m:
+        return None
+    nombre = re.sub(r'^solar(?:es)?\s+', '', m.group(1).strip(), flags=re.IGNORECASE)
+    return nombre.strip() or None
+
+
 def _contar_minigranjas(texto: str) -> int:
     """
     Cuenta cuántas minigranjas solares distintas se mencionan en el documento,
@@ -26,7 +43,7 @@ def _contar_minigranjas(texto: str) -> int:
     angulares «»).
     Devuelve 0 si no encuentra ninguna mención (el llamador decide el fallback).
     """
-    patron = r'[«"“]\s*Minigranja\s+Solar\s+([^»"”]{2,60}?)\s*[»"”]'
+    patron = r'[«"“]\s*Minigranjas?\s+(?:Solar(?:es)?\s+)?([^»"”]{2,60}?)\s*[»"”]'
     nombres = re.findall(patron, texto, re.IGNORECASE)
     vistos = {n.strip().lower() for n in nombres}
     return len(vistos)
@@ -223,6 +240,8 @@ def extraer_fun(texto: str) -> dict:
         r"superficie\s*\(ha\)[^\d]{0,20}([\d,\.]+)", texto
     ) or _extraer_numero(
         r"[áa]rea[^\d]{0,30}([\d,\.]+)\s*ha", texto
+    ) or _extraer_numero(
+        r"\(ha\)[:\s]+([\d,\.]+)", texto
     )
     # Costo instalación: campo "Costo del Proyecto, Obra o Actividad"
     r["costo_instalacion"] = _extraer_numero(
@@ -231,13 +250,11 @@ def extraer_fun(texto: str) -> dict:
         r"costo\s+del\s+proyecto[^\d]{0,40}([\d\.,]{6,})", texto
     )
     r["municipio"] = _extraer_texto(
-        r"municipio[:\s]+([A-Za-záéíóúÁÉÍÓÚñÑ\s]+?)(?:\n|,|departamento)", texto
+        r"municipio\s*:?\s*(?:de\s+)?([A-Za-záéíóúÁÉÍÓÚñÑ]+(?:[ ][A-Za-záéíóúÁÉÍÓÚñÑ]+){0,3})", texto
     )
     r["nombre_proyecto"] = _extraer_texto(
         r"nombre\s+del\s+proyecto[:\s]+([^\n]{5,80})", texto
-    ) or _extraer_texto(
-        r"minigranja\s+solar\s+([A-Za-záéíóúÁÉÍÓÚñÑ\s\w_]+?)(?:\n|\.)", texto
-    )
+    ) or _extraer_nombre_proyecto(texto)
     r["num_minigranjas"] = _contar_minigranjas(texto)
     return r
 
@@ -319,11 +336,9 @@ def extraer_informe_af(texto: str) -> dict:
             texto, r"[Tt]abla\s+\d+\.?\s*[Cc]ostos?\s+de\s+reposici[oó]n|[Vv]alor\s+total\s+compensaci[oó]n"
         )
 
-    r["nombre_proyecto"] = _extraer_texto(
-        r"(?:informe|plan|documento\s+técnico)\s+para\s+el\s+aprovechamiento[^\n]{0,5}\n([^\n]{5,80})", texto
-    )
+    r["nombre_proyecto"] = _extraer_nombre_proyecto(texto)
     r["municipio"] = _extraer_texto(
-        r"municipio[:\s]+([A-Za-záéíóúÁÉÍÓÚñÑ\s]+?)(?:\n|,|departamento)", texto
+        r"municipio\s*:?\s*(?:de\s+)?([A-Za-záéíóúÁÉÍÓÚñÑ]+(?:[ ][A-Za-záéíóúÁÉÍÓÚñÑ]+){0,3})", texto
     )
     r["num_minigranjas"] = _contar_minigranjas(texto)
 
@@ -366,9 +381,7 @@ def extraer_compensacion(texto: str) -> dict:
     # Costo compensación — usa extractor robusto que ignora valores unitarios /ha
     r["costo_compensacion"] = _extraer_costo_compensacion_total(texto)
 
-    r["nombre_proyecto"] = _extraer_texto(
-        r"(?:plan|programa)\s+de\s+compensaci[oó]n\s+([^\n]{5,80})", texto
-    )
+    r["nombre_proyecto"] = _extraer_nombre_proyecto(texto)
 
     return r
 
@@ -395,11 +408,9 @@ def extraer_aptitud_suelo(texto: str) -> dict:
     m = re.search(r"conclusi[oó]n(?:es)?[\s\S]{0,50}\n([\s\S]{50,400}?)(?:\n\n|\Z)", texto, re.IGNORECASE)
     r["conclusion"] = m.group(1).strip()[:300] if m else None
 
-    r["nombre_proyecto"] = _extraer_texto(
-        r"informe\s+(?:de\s+)?aptitud\s+([^\n]{5,80})", texto
-    )
+    r["nombre_proyecto"] = _extraer_nombre_proyecto(texto)
     r["municipio"] = _extraer_texto(
-        r"municipio[:\s]+([A-Za-záéíóúÁÉÍÓÚñÑ\s]+?)(?:\n|,|departamento)", texto
+        r"municipio\s*:?\s*(?:de\s+)?([A-Za-záéíóúÁÉÍÓÚñÑ]+(?:[ ][A-Za-záéíóúÁÉÍÓÚñÑ]+){0,3})", texto
     )
     return r
 
@@ -455,11 +466,9 @@ def extraer_oficio(texto: str) -> dict:
     r["individuos"] = _extraer_numero(
         r"aprovechamiento\s+forestal\s+de\s+(\d{1,4})\s+[áa]rboles?", texto
     )
-    r["nombre_proyecto"] = _extraer_texto(
-        r"proyecto\s+[\"«]?([^\n\"»]{5,80})[\"»]?", texto
-    )
+    r["nombre_proyecto"] = _extraer_nombre_proyecto(texto)
     r["municipio"] = _extraer_texto(
-        r"municipio[:\s]+([A-Za-záéíóúÁÉÍÓÚñÑ\s]+?)(?:\n|,|departamento)", texto
+        r"municipio\s*:?\s*(?:de\s+)?([A-Za-záéíóúÁÉÍÓÚñÑ]+(?:[ ][A-Za-záéíóúÁÉÍÓÚñÑ]+){0,3})", texto
     )
     for nombre in ["afinia", "cens", "aire", "air-e", "enel", "celsia", "codensa", "epsa", "chec", "essa"]:
         if nombre in texto.lower():
@@ -495,9 +504,12 @@ def extraer_inventario(texto: str) -> dict:
         r"\[INVENTARIO FORESTAL\]\s*Volumen\s+total\s*\(m3\)[^\d]*?(\d[\d.,]*)",
         texto
     )
-    r["nombre_proyecto"] = _extraer_texto(
+    _np_inventario = _extraer_texto(
         r"PROYECTO[:\s]+([^\n]{1,60}?)(?:\s{2,}|Unnamed|$)", texto
     )
+    if _np_inventario and "unnamed" in _np_inventario.lower():
+        _np_inventario = None
+    r["nombre_proyecto"] = _np_inventario or _extraer_nombre_proyecto(texto)
 
     return r
 
