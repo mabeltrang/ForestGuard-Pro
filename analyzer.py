@@ -10,6 +10,27 @@ Patrones basados en docs reales Unergy:
 
 import re
 
+# Costo de instalación de referencia para UNA sola minigranja solar (según tabla
+# de costos estándar de Unergy). El costo total reportado en el FUN/Costos debe
+# ser este valor multiplicado por la cantidad de minigranjas del proyecto.
+# Si este valor cambia en el futuro (nuevos costos base), solo hay que
+# actualizar esta constante.
+COSTO_INSTALACION_POR_MINIGRANJA = 495_705_000
+
+
+def _contar_minigranjas(texto: str) -> int:
+    """
+    Cuenta cuántas minigranjas solares distintas se mencionan en el documento,
+    buscando frases como: El proyecto denominado "Minigranja Solar X" consiste...
+    Soporta comillas rectas y tipográficas (comillas dobles curvas, comillas
+    angulares «»).
+    Devuelve 0 si no encuentra ninguna mención (el llamador decide el fallback).
+    """
+    patron = r'[«"“]\s*Minigranja\s+Solar\s+([^»"”]{2,60}?)\s*[»"”]'
+    nombres = re.findall(patron, texto, re.IGNORECASE)
+    vistos = {n.strip().lower() for n in nombres}
+    return len(vistos)
+
 
 # ---------------------------------------------------------------------------
 # UTILIDADES
@@ -217,6 +238,7 @@ def extraer_fun(texto: str) -> dict:
     ) or _extraer_texto(
         r"minigranja\s+solar\s+([A-Za-záéíóúÁÉÍÓÚñÑ\s\w_]+?)(?:\n|\.)", texto
     )
+    r["num_minigranjas"] = _contar_minigranjas(texto)
     return r
 
 
@@ -300,6 +322,10 @@ def extraer_informe_af(texto: str) -> dict:
     r["nombre_proyecto"] = _extraer_texto(
         r"(?:informe|plan|documento\s+técnico)\s+para\s+el\s+aprovechamiento[^\n]{0,5}\n([^\n]{5,80})", texto
     )
+    r["municipio"] = _extraer_texto(
+        r"municipio[:\s]+([A-Za-záéíóúÁÉÍÓÚñÑ\s]+?)(?:\n|,|departamento)", texto
+    )
+    r["num_minigranjas"] = _contar_minigranjas(texto)
 
     return r
 
@@ -372,6 +398,9 @@ def extraer_aptitud_suelo(texto: str) -> dict:
     r["nombre_proyecto"] = _extraer_texto(
         r"informe\s+(?:de\s+)?aptitud\s+([^\n]{5,80})", texto
     )
+    r["municipio"] = _extraer_texto(
+        r"municipio[:\s]+([A-Za-záéíóúÁÉÍÓÚñÑ\s]+?)(?:\n|,|departamento)", texto
+    )
     return r
 
 
@@ -428,6 +457,9 @@ def extraer_oficio(texto: str) -> dict:
     )
     r["nombre_proyecto"] = _extraer_texto(
         r"proyecto\s+[\"«]?([^\n\"»]{5,80})[\"»]?", texto
+    )
+    r["municipio"] = _extraer_texto(
+        r"municipio[:\s]+([A-Za-záéíóúÁÉÍÓÚñÑ\s]+?)(?:\n|,|departamento)", texto
     )
     for nombre in ["afinia", "cens", "aire", "air-e", "enel", "celsia", "codensa", "epsa", "chec", "essa"]:
         if nombre in texto.lower():
@@ -531,6 +563,16 @@ def clasificar_documento(nombre_archivo: str, texto: str) -> str:
 # COMPARACIÓN Y ANÁLISIS
 # ---------------------------------------------------------------------------
 
+def _normalizar_texto_comparacion(s: str) -> str:
+    """Para comparar textos entre documentos sin que mayúsculas, tildes o
+    espacios extra generen falsas inconsistencias (ej. 'Minigranjas Solares
+    César 3' vs 'MINIGRANJAS SOLARES CESAR 3')."""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", s.strip().lower())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", s)
+
+
 def _comparar(val_a, val_b, tolerancia_pct: float = 1.0) -> bool:
     if val_a is None or val_b is None:
         return True
@@ -542,7 +584,7 @@ def _comparar(val_a, val_b, tolerancia_pct: float = 1.0) -> bool:
         diff_pct = abs(a - b) / max(abs(a), abs(b)) * 100
         return diff_pct <= tolerancia_pct
     except ValueError:
-        return str(val_a).strip().lower() == str(val_b).strip().lower()
+        return _normalizar_texto_comparacion(str(val_a)) == _normalizar_texto_comparacion(str(val_b))
 
 
 def _fmt(val) -> str:
@@ -607,6 +649,20 @@ def analizar_paquete(documentos: dict) -> dict:
             })
 
     # ---- Filas ----
+    fila("Nombre del Proyecto", {
+        "FUN": fun.get("nombre_proyecto"),
+        "Informe AF": af.get("nombre_proyecto"),
+        "Inventario": inv.get("nombre_proyecto"),
+        "Plan Comp.": comp.get("nombre_proyecto"),
+        "Aptitud": apt.get("nombre_proyecto"),
+        "Oficio": ofi.get("nombre_proyecto"),
+    })
+    fila("Municipio", {
+        "FUN": fun.get("municipio"),
+        "Informe AF": af.get("municipio"),
+        "Aptitud": apt.get("municipio"),
+        "Oficio": ofi.get("municipio"),
+    })
     fila("Individuos a aprovechar", {
         "FUN": fun.get("individuos"),
         "Informe AF": af.get("individuos"),
@@ -686,6 +742,22 @@ def analizar_paquete(documentos: dict) -> dict:
                 "operacion": f"Aprov. {_fmt(c_ap)} + Comp. {_fmt(c_co)} + Instal. {_fmt(c_in)}",
                 "reportado": f"= {_fmt(str(total))} COP",
                 "ok": "ℹ️"
+            })
+        except Exception:
+            pass
+
+    num_minigranjas = af.get("num_minigranjas") or fun.get("num_minigranjas")
+    c_instalacion_reportado = fun.get("costo_instalacion") or cos.get("costo_instalacion")
+    if num_minigranjas and c_instalacion_reportado:
+        try:
+            esperado = num_minigranjas * COSTO_INSTALACION_POR_MINIGRANJA
+            real = int(float(c_instalacion_reportado))
+            ok = abs(esperado - real) <= 1
+            aritmetica.append({
+                "verificacion": "Costo instalación según # de minigranjas",
+                "operacion": f"{num_minigranjas} minigranja(s) × {_fmt(str(COSTO_INSTALACION_POR_MINIGRANJA))} = {_fmt(str(esperado))} esperado",
+                "reportado": f"{_fmt(str(real))} COP",
+                "ok": "✅" if ok else "❌"
             })
         except Exception:
             pass
