@@ -35,6 +35,24 @@ def _extraer_nombre_proyecto(texto: str) -> str | None:
     return nombre.strip() or None
 
 
+def _ocurrencias_numero(texto: str, patron: str) -> list[float]:
+    """
+    Encuentra TODAS las menciones numéricas que cumplen un patrón dentro de
+    un mismo documento (a diferencia de _extraer_numero, que solo devuelve
+    la primera). Se usa para verificar que un dato repetido varias veces en
+    el mismo documento (ej. el área a reponer/compensar, mencionada en varios
+    párrafos con distinta redacción) sea internamente consistente.
+    """
+    valores = []
+    for m in re.finditer(patron, texto, re.IGNORECASE):
+        val = _normalizar_num_str(m.group(1))
+        try:
+            valores.append(float(val))
+        except ValueError:
+            pass
+    return valores
+
+
 def _contar_minigranjas(texto: str) -> int:
     """
     Cuenta cuántas minigranjas solares distintas se mencionan en el documento,
@@ -377,6 +395,19 @@ def extraer_compensacion(texto: str) -> dict:
         r"[áa]rea\s+total\s+a\s+compensar[^\d]{0,20}(\d[\d.,]*)", texto
     )
 
+    # Área a reponer/compensar (ha) — a diferencia de "individuos a reponer"
+    # (que solo aplica cuando la reposición es 1:1 por árbol), en la mayoría
+    # de los planes de compensación de Unergy la obligación se cumple en
+    # HECTÁREAS de preservación/restauración, no en número de árboles.
+    # Esta cifra suele repetirse varias veces en el documento con distinta
+    # redacción — aquí se capturan TODAS las menciones para verificar que
+    # el propio documento sea internamente consistente (ver analizar_paquete).
+    _valores_area_reponer = _ocurrencias_numero(
+        texto, r"(?:compensar|reponer)[^\.]{0,300}?(\d[\d.,]*)\s*(?:ha\b|hect[áa]reas?)"
+    )
+    r["area_reponer_ha"] = _valores_area_reponer[0] if _valores_area_reponer else None
+    r["_area_reponer_ocurrencias"] = _valores_area_reponer
+
     # Costo — "COP $34,320,000" o tabla Total
     # Costo compensación — usa extractor robusto que ignora valores unitarios /ha
     r["costo_compensacion"] = _extraer_costo_compensacion_total(texto)
@@ -692,6 +723,9 @@ def analizar_paquete(documentos: dict) -> dict:
         "Plan Comp.": comp.get("individuos_reponer"),
         "Costos": cos.get("individuos_reponer"),
     })
+    fila("Área a reponer/compensar (ha)", {
+        "Plan Comp.": comp.get("area_reponer_ha"),
+    })
     fila("Área del predio (ha)", {
         "FUN": fun.get("area_ha"),
         "Informe AF": af.get("area_ha"),
@@ -771,6 +805,17 @@ def analizar_paquete(documentos: dict) -> dict:
             })
         except Exception:
             pass
+
+    valores_reponer = comp.get("_area_reponer_ocurrencias") or []
+    if len(valores_reponer) >= 2:
+        ok = len(set(valores_reponer)) == 1
+        aritmetica.append({
+            "verificacion": "Área a reponer — coherencia interna del Plan de Compensación",
+            "operacion": f"{len(valores_reponer)} menciones encontradas en el documento: " +
+                         ", ".join(f"{v} ha" for v in valores_reponer),
+            "reportado": f"{valores_reponer[0]} ha" if ok else "⚠️ valores distintos entre sí",
+            "ok": "✅" if ok else "❌"
+        })
 
     return {
         "cotejo": filas_cotejo,
