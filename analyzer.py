@@ -505,10 +505,8 @@ def extraer_inventario(texto: str) -> dict:
         texto
     )
     _np_inventario = _extraer_texto(
-        r"PROYECTO[:\s]+([^\n]{1,60}?)(?:\s{2,}|Unnamed|$)", texto
+        r"\[INVENTARIO FORESTAL\]\s*Nombre del proyecto:\s*([^\n]{1,80})", texto
     )
-    if _np_inventario and "unnamed" in _np_inventario.lower():
-        _np_inventario = None
     r["nombre_proyecto"] = _np_inventario or _extraer_nombre_proyecto(texto)
 
     return r
