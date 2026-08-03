@@ -201,15 +201,18 @@ if uploaded_files:
                 res = documentos_resaltado[nombre]
                 st.markdown(f"**📎 {nombre}**")
                 for h in res.get("texto", []):
-                    st.markdown(f"- *Texto* ({h['ubicacion']}): \"{h['texto_resaltado']}\"")
+                    seccion = f" — sección: *{h['seccion']}*" if h.get("seccion") else ""
+                    st.markdown(f"- 📝 Texto resaltado ({h['ubicacion']}){seccion}: \"{h['texto_resaltado']}\"")
                 for h in res.get("imagenes", []):
-                    if "archivo_imagen" in h:
-                        st.markdown(f"- *Imagen embebida* `{h['archivo_imagen']}`: ~{h['pct_amarillo']}% de la imagen en amarillo")
+                    seccion = f" — sección: *{h['seccion']}*" if h.get("seccion") else ""
+                    if "pagina" in h:
+                        st.markdown(f"- 🖼️ Imagen/página con resaltado — página {h['pagina']}{seccion}")
                     else:
-                        st.markdown(f"- *Página {h['pagina']}* (rasterizada): ~{h['pct_amarillo']}% en amarillo")
+                        st.markdown(f"- 🖼️ Imagen con resaltado ({h['ubicacion']}){seccion}")
                 for h in res.get("anotaciones_pdf", []):
+                    seccion = f" — sección: *{h['seccion']}*" if h.get("seccion") else ""
                     comentario = f" — nota: \"{h['comentario']}\"" if h.get("comentario") else ""
-                    st.markdown(f"- *Anotación de resaltado* en página {h['pagina']}{comentario}")
+                    st.markdown(f"- 🖊️ Anotación de resaltado — página {h['pagina']}{seccion}{comentario}")
             st.caption("Revisa estas zonas antes de radicar: el resaltado amarillo suele indicar un dato que falta confirmar.")
 
     if archivos_desactualizados:
