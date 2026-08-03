@@ -4,3 +4,6 @@ python-docx
 pandas
 openpyxl
 python-multipart
+Pillow
+numpy
+pymupdf
