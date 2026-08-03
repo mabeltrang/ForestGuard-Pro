@@ -5,6 +5,8 @@ from extractor import extract_text_from_file
 from analyzer import clasificar_documento, extraer_fun, extraer_informe_af, \
     extraer_compensacion, extraer_aptitud_suelo, extraer_costos, extraer_oficio, \
     extraer_inventario, analizar_paquete
+from resaltado_checker import detectar_resaltado_documento
+from fecha_checker import extraer_fecha_documento, evaluar_vigencia
 
 # ---------------------------------------------------------------------------
 # CONFIGURACIÓN
@@ -84,6 +86,8 @@ if uploaded_files:
     documentos_texto = {}
     documentos_tipo = {}
     documentos_datos = {}
+    documentos_resaltado = {}
+    documentos_vigencia = {}
 
     for file in uploaded_files:
         suffix = os.path.splitext(file.name)[1]
@@ -99,6 +103,20 @@ if uploaded_files:
             tipo = clasificar_documento(file.name, texto)
             documentos_tipo[file.name] = tipo
 
+            # Resaltado amarillo (texto e imágenes) — convención interna para
+            # marcar datos pendientes antes de radicar
+            try:
+                documentos_resaltado[file.name] = detectar_resaltado_documento(tmp_path, file.name)
+            except Exception:
+                documentos_resaltado[file.name] = {"texto": [], "imagenes": [], "anotaciones_pdf": [], "tiene_hallazgos": False}
+
+            # Fecha del encabezado y qué tan desactualizada está
+            try:
+                fecha_doc = extraer_fecha_documento(tmp_path, file.name)
+                documentos_vigencia[file.name] = evaluar_vigencia(fecha_doc)
+            except Exception:
+                documentos_vigencia[file.name] = {"estado": "sin_fecha", "dias": None, "fecha": None}
+
         except Exception as e:
             st.error(f"Error procesando {file.name}: {e}")
             documentos_tipo[file.name] = "DESCONOCIDO"
@@ -111,14 +129,26 @@ if uploaded_files:
     tipo_opciones = ["FUN", "INFORME_AF", "INVENTARIO", "COMPENSACION", "APTITUD", "COSTOS", "OFICIO", "DESCONOCIDO"]
     asignaciones = {}
 
-    cols = st.columns([3, 2])
+    ESTADO_VIGENCIA_LABEL = {
+        "vigente": "🟢 vigente",
+        "revisar": "🟡 revisar antigüedad",
+        "desactualizado": "🔴 desactualizado",
+        "fecha_futura": "🟡 fecha futura (revisar)",
+        "sin_fecha": "⚪ sin fecha detectada",
+    }
+
+    cols = st.columns([3, 2, 2, 2])
     with cols[0]:
         st.markdown("**Archivo**")
     with cols[1]:
         st.markdown("**Tipo detectado** (puedes corregir)")
+    with cols[2]:
+        st.markdown("**Fecha encabezado**")
+    with cols[3]:
+        st.markdown("**Resaltado amarillo**")
 
     for nombre, tipo_auto in documentos_tipo.items():
-        c1, c2 = st.columns([3, 2])
+        c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
         with c1:
             st.write(f"📎 {nombre}")
         with c2:
@@ -131,11 +161,69 @@ if uploaded_files:
                 label_visibility="collapsed"
             )
             asignaciones[nombre] = tipo_final
+        with c3:
+            vig = documentos_vigencia.get(nombre, {})
+            if vig.get("fecha"):
+                dias = vig["dias"]
+                st.markdown(
+                    f"{ESTADO_VIGENCIA_LABEL.get(vig['estado'], '⚪')}<br>"
+                    f"<span style='font-size:12px;color:#666;'>{vig['fecha'].strftime('%d/%m/%Y')} · hace {dias} días</span>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(ESTADO_VIGENCIA_LABEL["sin_fecha"])
+        with c4:
+            res = documentos_resaltado.get(nombre, {})
+            n_hallazgos = len(res.get("texto", [])) + len(res.get("imagenes", [])) + len(res.get("anotaciones_pdf", []))
+            if n_hallazgos > 0:
+                st.markdown(f"🟨 **{n_hallazgos}** hallazgo(s)")
+            else:
+                st.markdown("—")
 
     for nombre, tipo in asignaciones.items():
         if tipo in EXTRACTORES and documentos_texto.get(nombre):
             datos = EXTRACTORES[tipo](documentos_texto[nombre])
             documentos_datos[tipo] = datos
+
+    # ---------------------------------------------------------------------------
+    # DETALLE: RESALTADO AMARILLO Y VIGENCIA DE FECHAS
+    # ---------------------------------------------------------------------------
+    archivos_con_resaltado = [n for n, r in documentos_resaltado.items() if r.get("tiene_hallazgos")]
+    archivos_desactualizados = [
+        n for n, v in documentos_vigencia.items()
+        if v.get("estado") in ("desactualizado", "revisar", "fecha_futura")
+    ]
+
+    if archivos_con_resaltado:
+        st.markdown("---")
+        with st.expander(f"🟨 Resaltado amarillo detectado en {len(archivos_con_resaltado)} documento(s) — datos pendientes por confirmar", expanded=True):
+            for nombre in archivos_con_resaltado:
+                res = documentos_resaltado[nombre]
+                st.markdown(f"**📎 {nombre}**")
+                for h in res.get("texto", []):
+                    st.markdown(f"- *Texto* ({h['ubicacion']}): \"{h['texto_resaltado']}\"")
+                for h in res.get("imagenes", []):
+                    if "archivo_imagen" in h:
+                        st.markdown(f"- *Imagen embebida* `{h['archivo_imagen']}`: ~{h['pct_amarillo']}% de la imagen en amarillo")
+                    else:
+                        st.markdown(f"- *Página {h['pagina']}* (rasterizada): ~{h['pct_amarillo']}% en amarillo")
+                for h in res.get("anotaciones_pdf", []):
+                    comentario = f" — nota: \"{h['comentario']}\"" if h.get("comentario") else ""
+                    st.markdown(f"- *Anotación de resaltado* en página {h['pagina']}{comentario}")
+            st.caption("Revisa estas zonas antes de radicar: el resaltado amarillo suele indicar un dato que falta confirmar.")
+
+    if archivos_desactualizados:
+        st.markdown("---")
+        with st.expander(f"🕒 {len(archivos_desactualizados)} documento(s) con fecha de encabezado a revisar", expanded=True):
+            for nombre in archivos_desactualizados:
+                vig = documentos_vigencia[nombre]
+                if vig["estado"] == "desactualizado":
+                    st.markdown(f"🔴 **{nombre}** — fecha del {vig['fecha'].strftime('%d/%m/%Y')}, hace **{vig['dias']} días** (más de un año). Verifica si sigue vigente.")
+                elif vig["estado"] == "revisar":
+                    st.markdown(f"🟡 **{nombre}** — fecha del {vig['fecha'].strftime('%d/%m/%Y')}, hace **{vig['dias']} días**. Confirma si el trámite tiene un plazo de vigencia menor.")
+                elif vig["estado"] == "fecha_futura":
+                    st.markdown(f"🟡 **{nombre}** — se detectó una fecha futura ({vig['fecha'].strftime('%d/%m/%Y')}); revisa si es un error de formato o una fecha de vigencia/vencimiento.")
+            st.caption("Umbral por defecto: >180 días 'revisar', >365 días 'desactualizado'. Ajusta el umbral en fecha_checker.py si tu trámite tiene otro plazo.")
 
     # ---------------------------------------------------------------------------
     # VALIDACIÓN
