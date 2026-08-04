@@ -74,12 +74,19 @@ def _es_estilo_titulo(paragraph) -> bool:
 # UTILIDAD: ¿esta imagen tiene un bloque contiguo de amarillo tipo marcador?
 # ---------------------------------------------------------------------------
 
-def _tiene_bloque_amarillo(imagen_bytes: bytes, area_min_pct: float = 2.5) -> bool:
+def _tiene_bloque_amarillo(imagen_bytes: bytes, area_min_pct: float = 2.5, colorida_max_pct: float = 5.0) -> bool:
     """
     True si la imagen contiene un blob CONTIGUO de amarillo tipo resaltador
     (H≈45-68°, saturación y brillo altos) que cubre al menos `area_min_pct`%
-    del área de la imagen. Esto descarta ruido disperso (antialiasing de un
-    logo, un pixel amarillo en un mapa, etc.) que no forma un bloque real.
+    del área de la imagen, Y el resto de la imagen (lo que no es amarillo)
+    es mayormente blanco/negro/gris — es decir, se parece a un documento
+    escaneado con una marca encima, no a una foto o ícono a color.
+
+    Esto descarta tanto ruido disperso (antialiasing de un logo) como
+    fotografías/íconos con elementos amarillos legítimos (ej. un casco o
+    unas orejeras de protección personal color "amarillo de seguridad"),
+    que suelen tener otros colores saturados alrededor (azul, rojo, negro
+    con reflejos de color) y por eso NO deben marcarse como resaltado.
     """
     if not _PIL_OK:
         return False
@@ -107,6 +114,16 @@ def _tiene_bloque_amarillo(imagen_bytes: bytes, area_min_pct: float = 2.5) -> bo
         amarillo = (hue >= 45) & (hue <= 68) & (sat >= 0.35) & (val >= 0.55)
         if not amarillo.any():
             return False
+
+        # El resto de la imagen (lo no amarillo) debe ser mayormente
+        # acromático (blanco/negro/gris de texto e íconos de trámite), no
+        # colorido (fotos, logos, EPP). Si hay mucho color fuera del
+        # amarillo, es una foto/ícono, no un documento con resaltado.
+        resto = ~amarillo
+        if resto.any():
+            frac_colorida_resto = float((sat[resto] > 0.35).mean() * 100)
+            if frac_colorida_resto > colorida_max_pct:
+                return False
 
         if not _SCIPY_OK:
             # Sin scipy, usar el % total como respaldo con umbral más alto
