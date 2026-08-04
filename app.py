@@ -200,19 +200,45 @@ if uploaded_files:
             for nombre in archivos_con_resaltado:
                 res = documentos_resaltado[nombre]
                 st.markdown(f"**📎 {nombre}**")
+
+                # Agrupar TODO por sección para no repetir el título en cada
+                # fragmento/celda (una tabla con 12 celdas resaltadas debe
+                # verse como 1 aviso por sección, no 12 líneas idénticas).
+                por_seccion = {}
+
+                def _bucket(seccion):
+                    clave = seccion or "Sección no identificada"
+                    return por_seccion.setdefault(clave, {"parrafos_tablas": [], "imagenes": [], "anotaciones": []})
+
                 for h in res.get("texto", []):
-                    seccion = f" — sección: *{h['seccion']}*" if h.get("seccion") else ""
-                    st.markdown(f"- 📝 Texto resaltado ({h['ubicacion']}){seccion}: \"{h['texto_resaltado']}\"")
+                    _bucket(h.get("seccion"))["parrafos_tablas"].append(h)
                 for h in res.get("imagenes", []):
-                    seccion = f" — sección: *{h['seccion']}*" if h.get("seccion") else ""
-                    if "pagina" in h:
-                        st.markdown(f"- 🖼️ Imagen/página con resaltado — página {h['pagina']}{seccion}")
-                    else:
-                        st.markdown(f"- 🖼️ Imagen con resaltado ({h['ubicacion']}){seccion}")
+                    _bucket(h.get("seccion"))["imagenes"].append(h)
                 for h in res.get("anotaciones_pdf", []):
-                    seccion = f" — sección: *{h['seccion']}*" if h.get("seccion") else ""
-                    comentario = f" — nota: \"{h['comentario']}\"" if h.get("comentario") else ""
-                    st.markdown(f"- 🖊️ Anotación de resaltado — página {h['pagina']}{seccion}{comentario}")
+                    _bucket(h.get("seccion"))["anotaciones"].append(h)
+
+                for seccion, grupos in por_seccion.items():
+                    st.markdown(f"**📌 {seccion}**")
+
+                    if grupos["parrafos_tablas"]:
+                        por_ubicacion = {}
+                        for h in grupos["parrafos_tablas"]:
+                            por_ubicacion.setdefault(h["ubicacion"], []).append(h["texto_resaltado"])
+                        for ubicacion, valores in por_ubicacion.items():
+                            ejemplos = ", ".join(f'"{v}"' for v in valores[:3])
+                            extra = f" y {len(valores) - 3} más" if len(valores) > 3 else ""
+                            st.markdown(f"- 📝 {ubicacion} — {len(valores)} fragmento(s) resaltado(s) (ej: {ejemplos}{extra})")
+
+                    for h in grupos["imagenes"]:
+                        if "pagina" in h:
+                            st.markdown(f"- 🖼️ Página {h['pagina']} con resaltado")
+                        else:
+                            st.markdown(f"- 🖼️ Imagen con resaltado ({h['ubicacion']})")
+
+                    for h in grupos["anotaciones"]:
+                        comentario = f" — nota: \"{h['comentario']}\"" if h.get("comentario") else ""
+                        st.markdown(f"- 🖊️ Anotación de resaltado — página {h['pagina']}{comentario}")
+
             st.caption("Revisa estas zonas antes de radicar: el resaltado amarillo suele indicar un dato que falta confirmar.")
 
     if archivos_desactualizados:
