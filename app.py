@@ -7,7 +7,7 @@ from analyzer import clasificar_documento, extraer_fun, extraer_informe_af, \
     extraer_inventario, extraer_ctl, extraer_cus, extraer_poder, analizar_paquete
 from resaltado_checker import detectar_resaltado_documento
 from fecha_checker import extraer_fecha_documento, evaluar_vigencia
-from propietario_checker import verificar_propietario_inventario
+from propietario_checker import extraer_propietario_xlsx
 from cedula_checker import extraer_datos_cedula
 
 # ---------------------------------------------------------------------------
@@ -219,6 +219,23 @@ if uploaded_files:
                 st.warning(f"No se pudo leer la cédula {nombre}: {e}")
         elif tipo in EXTRACTORES and documentos_texto.get(nombre):
             datos = EXTRACTORES[tipo](documentos_texto[nombre])
+            if tipo == "INVENTARIO":
+                # El campo PROPIETARIO del Inventario vive en una celda de
+                # Excel (no en el texto aplanado), así que se lee aparte con
+                # openpyxl y se agrega al mismo dict para que quede en la
+                # misma fila de la tabla de cotejo.
+                tmp_path = None
+                try:
+                    suffix = os.path.splitext(nombre)[1]
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as t:
+                        t.write(buffers[nombre].getbuffer())
+                        tmp_path = t.name
+                    datos["propietario"] = extraer_propietario_xlsx(tmp_path)
+                except Exception:
+                    datos["propietario"] = None
+                finally:
+                    if tmp_path and os.path.exists(tmp_path):
+                        os.remove(tmp_path)
             documentos_datos[tipo] = datos
 
     # ---------------------------------------------------------------------------
@@ -289,62 +306,6 @@ if uploaded_files:
                 elif vig["estado"] == "fecha_futura":
                     st.markdown(f"🟡 **{nombre}** — se detectó una fecha futura ({vig['fecha'].strftime('%d/%m/%Y')}); revisa si es un error de formato o una fecha de vigencia/vencimiento.")
             st.caption("Umbral por defecto: >180 días 'revisar', >365 días 'desactualizado'. Ajusta el umbral en fecha_checker.py si tu trámite tiene otro plazo.")
-
-    # ---------------------------------------------------------------------------
-    # PROPIETARIO: INVENTARIO vs. PLAN/INFORME DE APROVECHAMIENTO
-    # ---------------------------------------------------------------------------
-    archivos_inventario = [n for n, t in asignaciones.items() if t == "INVENTARIO"]
-    archivos_informe_af = [n for n, t in asignaciones.items() if t == "INFORME_AF"]
-
-    if archivos_inventario and archivos_informe_af:
-        st.markdown("---")
-        alertas_propietario = []
-
-        for nombre_inv in archivos_inventario:
-            for nombre_af in archivos_informe_af:
-                tmp_inv = tmp_af = None
-                try:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as t1:
-                        t1.write(buffers[nombre_inv].getbuffer())
-                        tmp_inv = t1.name
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as t2:
-                        t2.write(buffers[nombre_af].getbuffer())
-                        tmp_af = t2.name
-
-                    resultado = verificar_propietario_inventario(tmp_inv, tmp_af)
-                    alertas_propietario.append((nombre_inv, nombre_af, resultado))
-                except Exception as e:
-                    st.warning(f"No se pudo comparar propietario entre {nombre_inv} y {nombre_af}: {e}")
-                finally:
-                    for p in (tmp_inv, tmp_af):
-                        if p and os.path.exists(p):
-                            os.remove(p)
-
-        hay_error = any(r["coincide"] is False for _, _, r in alertas_propietario)
-        with st.expander(
-            f"👤 Verificación de propietario (Inventario vs. Plan de Aprovechamiento)",
-            expanded=hay_error
-        ):
-            for nombre_inv, nombre_af, r in alertas_propietario:
-                if r["coincide"] is None:
-                    st.markdown(
-                        f"⚪ No se pudo determinar el propietario en **{nombre_inv}** y/o **{nombre_af}** "
-                        f"— revisa manualmente."
-                    )
-                elif r["coincide"]:
-                    st.markdown(
-                        f"🟢 **{nombre_inv}** — el propietario (\"{r['propietario_inventario']}\") "
-                        f"coincide con el del plan de aprovechamiento (**{nombre_af}**)."
-                    )
-                else:
-                    nombres_plan = ", ".join(p["nombre"] for p in r["propietarios_plan"]) or "ninguno detectado"
-                    st.markdown(
-                        f"🔴 **{nombre_inv}**: el campo PROPIETARIO dice \"**{r['propietario_inventario']}**\", "
-                        f"pero **{nombre_af}** identifica como propietario a **\"{nombres_plan}\"**. "
-                        f"El PROPIETARIO del inventario nunca debe ser Unergy/el solicitante/el contratista — "
-                        f"debe ser el dueño real del predio que autoriza el aprovechamiento."
-                    )
-            st.caption("Se compara por similitud de texto (nombres abreviados o con tildes/errores menores se consideran coincidencia).")
 
     # ---------------------------------------------------------------------------
     # VALIDACIÓN
