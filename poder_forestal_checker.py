@@ -55,10 +55,16 @@ _PREFIJOS_TRATAMIENTO = re.compile(
 # ---------------------------------------------------------------------------
 
 def extraer_propietario_poder(texto: str) -> list:
-    """Retorna [{"nombre","tipo_id","numero_id"}, ...] mencionados en el Poder."""
+    """
+    Retorna [{"nombre","tipo_id","numero_id"}, ...] mencionados en el Poder.
+    Se normaliza el texto a espacios simples antes de buscar, porque un
+    nombre partido en dos líneas por ajuste de línea (típico del texto
+    extraído de PDF/DOCX) haría fallar el patrón si se buscara tal cual.
+    """
+    texto_plano = re.sub(r"\s+", " ", texto)
     hallazgos = []
     vistos = set()
-    for m in _PATRON_PROPIETARIO_PODER.finditer(texto):
+    for m in _PATRON_PROPIETARIO_PODER.finditer(texto_plano):
         nombre_raw, tipo_id, numero_id = m.groups()
         nombre = _PREFIJOS_TRATAMIENTO.sub("", nombre_raw).strip(" ,.")
         clave = (nombre.upper(), numero_id)
