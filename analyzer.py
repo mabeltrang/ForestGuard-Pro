@@ -10,6 +10,9 @@ Patrones basados en docs reales Unergy:
 
 import re
 
+from ctl_cus_checker import extraer_matriculas, extraer_titulares_ctl
+from poder_forestal_checker import extraer_propietario_poder
+
 # Costo de instalación de referencia para UNA sola minigranja solar (según tabla
 # de costos estándar de Unergy). El costo total reportado en el FUN/Costos debe
 # ser este valor multiplicado por la cantidad de minigranjas del proyecto.
@@ -239,6 +242,26 @@ def _extraer_texto(patron: str, texto: str, flags=re.IGNORECASE) -> str | None:
     return m.group(1).strip() if m else None
 
 
+def _formatear_propietarios(lista: list) -> str | None:
+    """
+    [{'nombre','tipo_id','numero_id'}, ...] -> 'NOMBRE (TIPO NUMERO); ...'
+    El número de identificación se deja solo con dígitos (sin puntos/guiones)
+    para que la comparación entre documentos no falle solo porque uno escribió
+    '12.345.678' y otro '12345678'.
+    """
+    if not lista:
+        return None
+    partes = []
+    for p in lista:
+        numero_limpio = re.sub(r"\D", "", p.get("numero_id", "") or "")
+        partes.append(f"{p['nombre']} ({p.get('tipo_id', '')} {numero_limpio})".strip())
+    return "; ".join(partes)
+
+
+def _primera_matricula(lista: list) -> str | None:
+    return lista[0] if lista else None
+
+
 # ---------------------------------------------------------------------------
 # EXTRACCIÓN POR TIPO DE DOCUMENTO
 # ---------------------------------------------------------------------------
@@ -360,6 +383,43 @@ def extraer_informe_af(texto: str) -> dict:
     )
     r["num_minigranjas"] = _contar_minigranjas(texto)
 
+    # Propietario del predio + su identificación + matrícula inmobiliaria, si
+    # el Informe AF los menciona (frecuente: "...con la autorización del
+    # propietario, el señor X identificado con C.C. Y..." y "...predio con
+    # matrícula inmobiliaria No. Z...").
+    titulares_af = extraer_propietario_poder(texto)
+    r["propietario"] = _formatear_propietarios(titulares_af)
+    r["matricula"] = _primera_matricula(extraer_matriculas(texto))
+
+    return r
+
+
+def extraer_ctl(texto: str) -> dict:
+    """CTL — Certificado de Tradición y Libertad de Matrícula Inmobiliaria."""
+    r = {}
+    r["matricula"] = _primera_matricula(extraer_matriculas(texto))
+    r["propietario"] = _formatear_propietarios(extraer_titulares_ctl(texto))
+    r["municipio"] = _extraer_texto(
+        r"municipio\s*:?\s*(?:de\s+)?([A-Za-záéíóúÁÉÍÓÚñÑ]+(?:[ ][A-Za-záéíóúÁÉÍÓÚñÑ]+){0,3})", texto
+    )
+    return r
+
+
+def extraer_cus(texto: str) -> dict:
+    """CUS — Certificado de Uso del Suelo."""
+    r = {}
+    r["matricula"] = _primera_matricula(extraer_matriculas(texto))
+    r["municipio"] = _extraer_texto(
+        r"municipio\s*:?\s*(?:de\s+)?([A-Za-záéíóúÁÉÍÓÚñÑ]+(?:[ ][A-Za-záéíóúÁÉÍÓÚñÑ]+){0,3})", texto
+    )
+    return r
+
+
+def extraer_poder(texto: str) -> dict:
+    """Poder Forestal — propietario, su identificación y la matrícula que autoriza."""
+    r = {}
+    r["propietario"] = _formatear_propietarios(extraer_propietario_poder(texto))
+    r["matricula"] = _primera_matricula(extraer_matriculas(texto))
     return r
 
 
@@ -580,6 +640,22 @@ TIPOS = {
         "cordial saludo", "se permite presentar",
         "adjunta la siguiente documentación", "oficio"
     ],
+    "CTL": [
+        "certificado de tradición y libertad", "certificado de libertad y tradición",
+        "matrícula inmobiliaria", "folio de matrícula",
+        "titulares de derechos reales de dominio",
+        "oficina de registro de instrumentos públicos", "orip", "ctl"
+    ],
+    "CUS": [
+        "certificado de uso del suelo", "concepto de uso del suelo",
+        "certificación de uso de suelo", "uso de suelo urbano",
+        "secretaría de planeación", "curaduría urbana", "cus"
+    ],
+    "PODER": [
+        "poder forestal", "confiero poder", "otorgo poder",
+        "poder amplio y suficiente", "autorizo a la sociedad",
+        "confiere poder", "poder"
+    ],
 }
 
 
@@ -649,10 +725,18 @@ def analizar_paquete(documentos: dict) -> dict:
     apt  = documentos.get("APTITUD", {})
     cos  = documentos.get("COSTOS", {})
     ofi  = documentos.get("OFICIO", {})
+    ctl  = documentos.get("CTL", {})
+    cus  = documentos.get("CUS", {})
+    pod  = documentos.get("PODER", {})
 
     # Costo compensación: priorizar doc separado, fallback al AF
     costo_comp_val   = comp.get("costo_compensacion") or af.get("costo_compensacion")
     costo_comp_label = "Plan Comp." if comp.get("costo_compensacion") else "Informe AF"
+
+    COLUMNAS_DOC = [
+        "FUN", "Informe AF", "Inventario", "Plan Comp.", "Aptitud",
+        "Costos", "Oficio", "CTL", "CUS", "Poder Forestal",
+    ]
 
     filas_cotejo = []
     incoherencias = []
@@ -671,17 +755,11 @@ def analizar_paquete(documentos: dict) -> dict:
                     consistente = "❌"
                     break
 
-        filas_cotejo.append({
-            "dato": dato,
-            "FUN": _fmt(vals.get("FUN")),
-            "Informe AF": _fmt(vals.get("Informe AF")),
-            "Inventario": _fmt(vals.get("Inventario")),
-            "Plan Comp.": _fmt(vals.get("Plan Comp.")),
-            "Aptitud": _fmt(vals.get("Aptitud")),
-            "Costos": _fmt(vals.get("Costos")),
-            "Oficio": _fmt(vals.get("Oficio")),
-            "✓": consistente,
-        })
+        fila_dict = {"dato": dato}
+        for col in COLUMNAS_DOC:
+            fila_dict[col] = _fmt(vals.get(col))
+        fila_dict["✓"] = consistente
+        filas_cotejo.append(fila_dict)
 
         if consistente == "❌":
             incoherencias.append({
@@ -703,6 +781,19 @@ def analizar_paquete(documentos: dict) -> dict:
         "Informe AF": af.get("municipio"),
         "Aptitud": apt.get("municipio"),
         "Oficio": ofi.get("municipio"),
+        "CTL": ctl.get("municipio"),
+        "CUS": cus.get("municipio"),
+    })
+    fila("👤 Propietario del predio", {
+        "Informe AF": af.get("propietario"),
+        "CTL": ctl.get("propietario"),
+        "Poder Forestal": pod.get("propietario"),
+    })
+    fila("🏷️ Matrícula Inmobiliaria", {
+        "Informe AF": af.get("matricula"),
+        "CTL": ctl.get("matricula"),
+        "CUS": cus.get("matricula"),
+        "Poder Forestal": pod.get("matricula"),
     })
     fila("Individuos a aprovechar", {
         "FUN": fun.get("individuos"),
