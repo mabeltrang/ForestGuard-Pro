@@ -130,13 +130,29 @@ _PATRON_TITULAR_PROSA = re.compile(
     re.IGNORECASE,
 )
 
+# Formato clásico SNR (Superintendencia de Notariado y Registro): el CTL es
+# un historial de "ANOTACION"es de transacciones, cada una con
+# "PERSONAS QUE INTERVIENEN EN EL ACTO ... DE: <transfiere> / A: <recibe>
+# CC#/NIT# <numero> X" (la "X" marca a quien queda como Titular de derecho
+# real de dominio tras ese acto). El titular VIGENTE es quien aparece en el
+# último "A: ... X" del documento — las anotaciones son cronológicas, así
+# que la última refleja el estado actual de esta matrícula.
+_PATRON_TITULAR_ANOTACION = re.compile(
+    r"^\s*A:\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ \.]{2,80}?)\s+"
+    r"(CC|NIT|C\.?E\.?)#\s*([\d]+)\s*X\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
 
 def extraer_titulares_ctl(texto: str) -> list:
     """
     Retorna [{"nombre","tipo_id","numero_id"}, ...] de los titulares de
-    derechos reales de dominio mencionados en el CTL. Intenta primero el
-    formato de etiquetas (más confiable en un CTL real), y complementa con
-    el patrón de prosa si no encontró nada.
+    derechos reales de dominio mencionados en el CTL. Intenta, en orden:
+    1. Formato de etiquetas (Nombre/Identificación) — CTL digitales nuevos.
+    2. Formato clásico SNR de anotaciones (DE:/A: ... X) — se queda con el
+       ÚLTIMO "A: ... X" del documento (el titular vigente hoy, no todo el
+       historial de dueños anteriores/embargos).
+    3. Prosa ("identificado con") — como último respaldo.
     """
     hallazgos = []
     vistos = set()
@@ -150,6 +166,17 @@ def extraer_titulares_ctl(texto: str) -> list:
             continue
         vistos.add(clave)
         hallazgos.append({"nombre": nombre, "tipo_id": tipo_id, "numero_id": numero_id})
+
+    if not hallazgos:
+        anotaciones = list(_PATRON_TITULAR_ANOTACION.finditer(texto))
+        if anotaciones:
+            m = anotaciones[-1]  # la última anotación = el titular vigente
+            nombre = m.group(1).strip(" ,.")
+            hallazgos.append({
+                "nombre": nombre,
+                "tipo_id": m.group(2).replace(".", "").upper(),
+                "numero_id": m.group(3),
+            })
 
     if not hallazgos:
         # Respaldo en prosa: se normaliza a espacios simples porque un
