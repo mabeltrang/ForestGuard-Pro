@@ -152,7 +152,12 @@ def extraer_titulares_ctl(texto: str) -> list:
         hallazgos.append({"nombre": nombre, "tipo_id": tipo_id, "numero_id": numero_id})
 
     if not hallazgos:
-        for m in _PATRON_TITULAR_PROSA.finditer(texto):
+        # Respaldo en prosa: se normaliza a espacios simples porque un
+        # nombre partido en dos líneas por ajuste de línea haría fallar el
+        # patrón (a diferencia del patrón de etiquetas de arriba, que SÍ
+        # depende de saltos de línea reales entre "Nombre" e "Identificación").
+        texto_plano = re.sub(r"\s+", " ", texto)
+        for m in _PATRON_TITULAR_PROSA.finditer(texto_plano):
             nombre_raw, tipo_id, numero_id = m.groups()
             nombre = re.sub(
                 r"^(la\s+se[ñn]ora|el\s+se[ñn]or(?:\(a\))?|la\s+sociedad)\s+",
