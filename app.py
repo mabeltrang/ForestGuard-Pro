@@ -9,6 +9,7 @@ from resaltado_checker import detectar_resaltado_documento
 from fecha_checker import extraer_fecha_documento, evaluar_vigencia
 from propietario_checker import extraer_propietario_xlsx
 from cedula_checker import extraer_datos_cedula
+from document_vision import extraer_ctl_vision, extraer_cus_vision, extraer_poder_vision
 
 # ---------------------------------------------------------------------------
 # CONFIGURACIÓN
@@ -30,6 +31,15 @@ EXTRACTORES = {
     "CTL": extraer_ctl,
     "CUS": extraer_cus,
     "PODER": extraer_poder,
+}
+
+# Respaldo por visión (Claude) para cuando el PDF de CTL/CUS/Poder es un
+# escaneo/foto sin texto real — pypdf no puede leer eso, así que sin este
+# respaldo el archivo quedaría sin ningún dato extraído.
+VISION_FALLBACK = {
+    "CTL": extraer_ctl_vision,
+    "CUS": extraer_cus_vision,
+    "PODER": extraer_poder_vision,
 }
 
 LABELS = {
@@ -217,6 +227,19 @@ if uploaded_files:
                 documentos_datos.setdefault("CEDULA_MULTI", {})[nombre] = st.session_state[cache_key]
             except Exception as e:
                 st.warning(f"No se pudo leer la cédula {nombre}: {e}")
+        elif tipo in ("CTL", "CUS", "PODER") and not (documentos_texto.get(nombre) or "").strip():
+            # El PDF no tiene texto real (escaneo/foto) — se recurre a IA
+            # (visión) para leer los mismos campos que se buscarían por regex.
+            cache_key = f"_visionfallback_{tipo}_{nombre}_{len(buffers[nombre].getvalue())}"
+            try:
+                if cache_key not in st.session_state:
+                    with st.spinner(f"Leyendo {nombre} con IA (documento escaneado sin texto)..."):
+                        st.session_state[cache_key] = VISION_FALLBACK[tipo](
+                            buffers[nombre].getvalue(), nombre
+                        )
+                documentos_datos[tipo] = st.session_state[cache_key]
+            except Exception as e:
+                st.warning(f"No se pudo leer {nombre} con IA: {e}")
         elif tipo in EXTRACTORES and documentos_texto.get(nombre):
             datos = EXTRACTORES[tipo](documentos_texto[nombre])
             if tipo == "INVENTARIO":
