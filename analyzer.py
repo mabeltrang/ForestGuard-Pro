@@ -246,20 +246,36 @@ def _formatear_propietarios(lista: list) -> str | None:
     """
     [{'nombre','tipo_id','numero_id'}, ...] -> 'NOMBRE (TIPO NUMERO); ...'
     El número de identificación se deja solo con dígitos (sin puntos/guiones)
-    para que la comparación entre documentos no falle solo porque uno escribió
-    '12.345.678' y otro '12345678'.
+    y el tipo sin puntos (CC en vez de C.C) para que la comparación entre
+    documentos no falle solo por formato — incluyendo contra el resultado de
+    la cédula leída por IA, que siempre devuelve el tipo sin puntos.
     """
     if not lista:
         return None
     partes = []
     for p in lista:
         numero_limpio = re.sub(r"\D", "", p.get("numero_id", "") or "")
-        partes.append(f"{p['nombre']} ({p.get('tipo_id', '')} {numero_limpio})".strip())
+        tipo_limpio = (p.get("tipo_id", "") or "").replace(".", "")
+        partes.append(f"{p['nombre']} ({tipo_limpio} {numero_limpio})".strip())
     return "; ".join(partes)
 
 
 def _primera_matricula(lista: list) -> str | None:
     return lista[0] if lista else None
+
+
+def _formatear_cedula(datos: dict | None) -> str | None:
+    """
+    Formatea el resultado de cedula_checker.extraer_datos_cedula() al mismo
+    formato 'NOMBRE (TIPO NUMERO)' usado por _formatear_propietarios(), para
+    que la fila del cotejo pueda comparar cédula vs. Informe AF/CTL/Poder
+    con el mismo criterio de igualdad de texto.
+    """
+    if not datos or not datos.get("nombre"):
+        return None
+    numero_limpio = re.sub(r"\D", "", datos.get("numero_identificacion") or "")
+    tipo = (datos.get("tipo_documento") or "").replace(".", "").strip()
+    return f"{datos['nombre']} ({tipo} {numero_limpio})".strip()
 
 
 # ---------------------------------------------------------------------------
@@ -649,6 +665,7 @@ TIPOS = {
     "CUS": [
         "certificado de uso del suelo", "concepto de uso del suelo",
         "certificación de uso de suelo", "uso de suelo urbano",
+        "certificado del suelo", "certificado de uso de suelo",
         "secretaría de planeación", "curaduría urbana", "cus"
     ],
     "PODER": [
@@ -658,8 +675,28 @@ TIPOS = {
     ],
 }
 
+# Documento de identidad del propietario (cédula/C.C./C.E./NIT) — casi
+# siempre es una FOTO o un PDF escaneado sin texto real, así que no se puede
+# clasificar por palabras clave dentro del texto como los demás tipos. Se
+# detecta por el NOMBRE del archivo, con límites de palabra para no
+# confundir "cc" con substrings de otras palabras (ej. "ocupación").
+_PATRON_CEDULA_ARCHIVO = re.compile(
+    r"\b(cc|c\.c\.?|cedula|cédula|c\.e\.?|identificaci[oó]n)\b",
+    re.IGNORECASE,
+)
+
 
 def clasificar_documento(nombre_archivo: str, texto: str) -> str:
+    # Cédula/documento de identidad: casi siempre es una foto o PDF escaneado
+    # sin texto real, así que se detecta por el NOMBRE del archivo antes de
+    # intentar la clasificación normal por palabras clave del contenido.
+    # Se reemplazan '_' y '-' por espacios antes de aplicar \b, porque el
+    # guion bajo cuenta como parte de una "palabra" en regex y rompería la
+    # detección en nombres como 'CEDULA_MAR.pdf' (quedaría pegado a "mar").
+    nombre_espaciado = re.sub(r"[_\-]", " ", nombre_archivo)
+    if _PATRON_CEDULA_ARCHIVO.search(nombre_espaciado):
+        return "CEDULA"
+
     nombre = nombre_archivo.lower()
     texto_n = _normalizar(texto[:4000])
 
@@ -728,6 +765,7 @@ def analizar_paquete(documentos: dict) -> dict:
     ctl  = documentos.get("CTL", {})
     cus  = documentos.get("CUS", {})
     pod  = documentos.get("PODER", {})
+    cedulas = documentos.get("CEDULA_MULTI", {})  # {nombre_archivo: datos_cedula}
 
     # Costo compensación: priorizar doc separado, fallback al AF
     costo_comp_val   = comp.get("costo_compensacion") or af.get("costo_compensacion")
@@ -735,7 +773,7 @@ def analizar_paquete(documentos: dict) -> dict:
 
     COLUMNAS_DOC = [
         "FUN", "Informe AF", "Inventario", "Plan Comp.", "Aptitud",
-        "Costos", "Oficio", "CTL", "CUS", "Poder Forestal",
+        "Costos", "Oficio", "CTL", "CUS", "Poder Forestal", "Cédula (IA)",
     ]
 
     filas_cotejo = []
@@ -789,6 +827,17 @@ def analizar_paquete(documentos: dict) -> dict:
         "CTL": ctl.get("propietario"),
         "Poder Forestal": pod.get("propietario"),
     })
+    # Una fila POR CADA cédula subida (puede haber más de una en el mismo
+    # paquete — ej. la del propietario y la de otra persona/cónyuge — y cada
+    # una se compara por separado contra el propietario ya identificado en
+    # el Informe AF / CTL / Poder, en vez de mezclarlas en una sola columna).
+    for nombre_archivo, datos_ced in cedulas.items():
+        fila(f"🪪 Cédula — {nombre_archivo}", {
+            "Informe AF": af.get("propietario"),
+            "CTL": ctl.get("propietario"),
+            "Poder Forestal": pod.get("propietario"),
+            "Cédula (IA)": _formatear_cedula(datos_ced),
+        })
     fila("🏷️ Matrícula Inmobiliaria", {
         "Informe AF": af.get("matricula"),
         "CTL": ctl.get("matricula"),
