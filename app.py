@@ -7,9 +7,8 @@ from analyzer import clasificar_documento, extraer_fun, extraer_informe_af, \
     extraer_inventario, extraer_ctl, extraer_cus, extraer_poder, analizar_paquete
 from resaltado_checker import detectar_resaltado_documento
 from fecha_checker import extraer_fecha_documento, evaluar_vigencia
-from propietario_checker import verificar_propietario_inventario, \
-    extraer_propietarios_docx, extraer_propietario_xlsx
-from cedula_checker import verificar_cedula_propietario
+from propietario_checker import verificar_propietario_inventario
+from cedula_checker import extraer_datos_cedula
 
 # ---------------------------------------------------------------------------
 # CONFIGURACIÓN
@@ -44,6 +43,7 @@ LABELS = {
     "CTL": "🧾 CTL",
     "CUS": "🌳 CUS",
     "PODER": "📜 Poder Forestal",
+    "CEDULA": "🪪 Cédula (IA)",
     "DESCONOCIDO": "❓ Desconocido",
 }
 
@@ -72,21 +72,26 @@ with st.sidebar:
     - CTL (Certificado de Tradición y Libertad)
     - CUS (Certificado de Uso del Suelo)
     - Poder Forestal
+    - Cédula/documento de identidad del propietario *(foto o PDF escaneado)*
 
-    *(PDF, DOCX, XLSX)*
+    *(PDF, DOCX, XLSX, JPG, PNG)*
 
     La app cruza automáticamente **propietario** y **matrícula inmobiliaria**
-    entre el Informe AF, el CTL, el CUS y el Poder Forestal en la tabla de
-    cotejo (fila "🔍 Validar Paquete").
+    entre el Informe AF, el CTL, el CUS, el Poder Forestal y la Cédula en la
+    tabla de cotejo (botón "🔍 Validar Paquete"). La cédula se lee con IA
+    (visión) apenas la subes — no hay que subirla por separado.
     """)
     st.markdown("---")
-    st.caption("Validación 100% local — sin API keys ni servicios externos.")
+    st.caption(
+        "Validación 100% local, salvo la lectura de la cédula (usa la API de "
+        "Anthropic con visión)."
+    )
 
 # Carga de archivos
 uploaded_files = st.file_uploader(
-    "Sube los documentos del paquete forestal",
+    "Sube los documentos del paquete forestal (incluye foto/PDF de la cédula del propietario)",
     accept_multiple_files=True,
-    type=["pdf", "docx", "doc", "xlsx", "xls"]
+    type=["pdf", "docx", "doc", "xlsx", "xls", "jpg", "jpeg", "png", "webp"]
 )
 
 if not uploaded_files:
@@ -143,7 +148,7 @@ if uploaded_files:
                 os.remove(tmp_path)
 
     # Clasificación con corrección manual
-    tipo_opciones = ["FUN", "INFORME_AF", "INVENTARIO", "COMPENSACION", "APTITUD", "COSTOS", "OFICIO", "CTL", "CUS", "PODER", "DESCONOCIDO"]
+    tipo_opciones = ["FUN", "INFORME_AF", "INVENTARIO", "COMPENSACION", "APTITUD", "COSTOS", "OFICIO", "CTL", "CUS", "PODER", "CEDULA", "DESCONOCIDO"]
     asignaciones = {}
 
     ESTADO_VIGENCIA_LABEL = {
@@ -198,7 +203,21 @@ if uploaded_files:
                 st.markdown("—")
 
     for nombre, tipo in asignaciones.items():
-        if tipo in EXTRACTORES and documentos_texto.get(nombre):
+        if tipo == "CEDULA":
+            cache_key = f"_cedula_cache_{nombre}_{len(buffers[nombre].getvalue())}"
+            try:
+                if cache_key not in st.session_state:
+                    with st.spinner(f"Leyendo documento de identidad ({nombre})..."):
+                        st.session_state[cache_key] = extraer_datos_cedula(
+                            buffers[nombre].getvalue(), nombre
+                        )
+                # Varias cédulas pueden convivir en el mismo paquete (ej. la
+                # del propietario y la de otra persona) — se guardan todas,
+                # una por archivo, en vez de sobrescribirse entre sí.
+                documentos_datos.setdefault("CEDULA_MULTI", {})[nombre] = st.session_state[cache_key]
+            except Exception as e:
+                st.warning(f"No se pudo leer la cédula {nombre}: {e}")
+        elif tipo in EXTRACTORES and documentos_texto.get(nombre):
             datos = EXTRACTORES[tipo](documentos_texto[nombre])
             documentos_datos[tipo] = datos
 
@@ -328,132 +347,6 @@ if uploaded_files:
             st.caption("Se compara por similitud de texto (nombres abreviados o con tildes/errores menores se consideran coincidencia).")
 
     # ---------------------------------------------------------------------------
-    # PROPIETARIO ESPERADO (compartido) — se calcula una sola vez y se reutiliza
-    # en las secciones de Cédula, CTL/CUS y Poder Forestal.
-    # ---------------------------------------------------------------------------
-    propietarios_plan_general = []
-    propietario_inventario_general = None
-
-    if archivos_informe_af:
-        tmp_af_path = None
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as t:
-                t.write(buffers[archivos_informe_af[0]].getbuffer())
-                tmp_af_path = t.name
-            propietarios_plan_general = extraer_propietarios_docx(tmp_af_path)
-        except Exception as e:
-            st.warning(f"No se pudo leer propietarios del Informe AF: {e}")
-        finally:
-            if tmp_af_path and os.path.exists(tmp_af_path):
-                os.remove(tmp_af_path)
-
-    if archivos_inventario:
-        tmp_inv_path = None
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as t:
-                t.write(buffers[archivos_inventario[0]].getbuffer())
-                tmp_inv_path = t.name
-            propietario_inventario_general = extraer_propietario_xlsx(tmp_inv_path)
-        except Exception as e:
-            st.warning(f"No se pudo leer el PROPIETARIO del Inventario: {e}")
-        finally:
-            if tmp_inv_path and os.path.exists(tmp_inv_path):
-                os.remove(tmp_inv_path)
-
-    # ---------------------------------------------------------------------------
-    # CÉDULA DEL PROPIETARIO (foto o PDF escaneado) — lectura por IA (visión)
-    # ---------------------------------------------------------------------------
-    st.markdown("---")
-    st.subheader("🪪 Verificar cédula del propietario (opcional)")
-    st.caption(
-        "Sube una foto o un PDF escaneado de la cédula/NIT del propietario del "
-        "predio. A diferencia del resto de la app (que solo lee texto real de "
-        "los documentos), esto usa la API de visión de Claude para leer el "
-        "nombre y el número de identificación de la imagen, y los compara "
-        "contra el Plan/Informe AF y el Inventario."
-    )
-
-    archivo_cedula = st.file_uploader(
-        "Cédula / documento de identidad del propietario (jpg, png o pdf escaneado)",
-        type=["pdf", "jpg", "jpeg", "png", "webp"],
-        accept_multiple_files=False,
-        key="cedula_uploader",
-    )
-
-    datos_cedula_general = None  # se reutiliza en la sección de Poder Forestal
-
-    if archivo_cedula:
-        with st.spinner("Leyendo documento de identidad..."):
-            resultado_cedula = verificar_cedula_propietario(
-                archivo_cedula.getvalue(),
-                archivo_cedula.name,
-                propietarios_plan=propietarios_plan_general,
-                propietario_inventario=propietario_inventario_general,
-            )
-        datos_cedula_general = resultado_cedula
-
-        if resultado_cedula.get("es_documento_identidad") is False:
-            st.error(
-                "⚠️ La imagen/PDF no parece corresponder a un documento de identidad. "
-                + (resultado_cedula.get("observaciones") or "")
-            )
-        elif not resultado_cedula.get("numero_identificacion") and not resultado_cedula.get("nombre"):
-            st.warning(
-                "No se pudo leer nombre ni número de identificación. "
-                + (resultado_cedula.get("observaciones") or "Verifica que la imagen sea legible.")
-            )
-        else:
-            st.markdown(
-                f"**Leído del documento:** {resultado_cedula.get('nombre') or '—'} · "
-                f"{resultado_cedula.get('tipo_documento') or 'ID'} "
-                f"{resultado_cedula.get('numero_identificacion') or '—'} "
-                f"(confianza: {resultado_cedula.get('confianza')})"
-            )
-            if resultado_cedula.get("observaciones"):
-                st.caption(f"ℹ️ {resultado_cedula['observaciones']}")
-
-            # --- vs. Plan/Informe AF (por número de identificación, o nombre si no hay match numérico) ---
-            if propietarios_plan_general:
-                cp = resultado_cedula.get("coincide_plan")
-                if cp is True:
-                    m = resultado_cedula.get("mejor_match_plan") or {}
-                    st.markdown(
-                        f"🟢 Coincide con el propietario del Plan/Informe AF "
-                        f"(**{m.get('nombre')}**, {m.get('tipo_id')} {m.get('numero_id')}) "
-                        f"— criterio: {resultado_cedula.get('criterio_plan')}."
-                    )
-                elif cp is False:
-                    nombres = ", ".join(p["nombre"] for p in propietarios_plan_general) or "ninguno detectado"
-                    st.markdown(
-                        f"🔴 El número de identificación de la cédula **no coincide** con "
-                        f"ningún propietario del Plan/Informe AF (detectado(s): {nombres})."
-                    )
-                else:
-                    st.markdown(
-                        f"🟡 Resultado ambiguo entre número de identificación y nombre "
-                        f"— revisa manualmente ({resultado_cedula.get('criterio_plan')})."
-                    )
-            else:
-                st.caption("No hay un Informe AF cargado para comparar el número de identificación.")
-
-            # --- vs. Inventario (solo por nombre; el inventario normalmente no trae número de ID) ---
-            if propietario_inventario_general:
-                ci = resultado_cedula.get("coincide_inventario")
-                sim = resultado_cedula.get("similitud_inventario")
-                if ci:
-                    st.markdown(
-                        f"🟢 El nombre coincide con el PROPIETARIO del Inventario "
-                        f"(\"{propietario_inventario_general}\"), similitud {sim}."
-                    )
-                elif ci is False:
-                    st.markdown(
-                        f"🔴 El nombre leído (\"{resultado_cedula.get('nombre')}\") no coincide con "
-                        f"el PROPIETARIO del Inventario (\"{propietario_inventario_general}\"), similitud {sim}."
-                    )
-            else:
-                st.caption("No hay un Inventario cargado para comparar por nombre.")
-
-    # ---------------------------------------------------------------------------
     # VALIDACIÓN
     # ---------------------------------------------------------------------------
     st.markdown("---")
@@ -486,7 +379,7 @@ if uploaded_files:
             })
 
             # Quitar columnas de docs que no se cargaron (todas vacías o "—")
-            doc_cols = ["FUN", "Informe AF", "Inventario", "Plan Comp.", "Aptitud", "Costos", "Oficio", "CTL", "CUS", "Poder Forestal"]
+            doc_cols = ["FUN", "Informe AF", "Inventario", "Plan Comp.", "Aptitud", "Costos", "Oficio", "CTL", "CUS", "Poder Forestal", "Cédula (IA)"]
             cols_con_datos = [
                 c for c in doc_cols
                 if c in df.columns and df[c].notna().any() and (df[c] != "—").any()
