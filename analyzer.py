@@ -744,7 +744,13 @@ def clasificar_documento(nombre_archivo: str, texto: str) -> str:
     if _PATRON_CEDULA_ARCHIVO.search(nombre_espaciado):
         return "CEDULA"
 
-    nombre = nombre_archivo.lower()
+    # Mismo reemplazo para la clasificación general: sin esto, una palabra
+    # clave de varias palabras como "certificado del suelo" nunca encuentra
+    # match contra un archivo nombrado "CERTIFICADO_DEL_SUELO.pdf" (los
+    # guiones bajos rompen la coincidencia de substring), y si además el PDF
+    # es un escaneo sin texto (0 caracteres extraídos), el archivo completo
+    # queda sin ninguna señal para clasificar.
+    nombre = nombre_espaciado.lower()
     texto_n = _normalizar(texto[:4000])
 
     puntajes = {tipo: 0 for tipo in TIPOS}
@@ -788,6 +794,26 @@ def _comparar(val_a, val_b, tolerancia_pct: float = 1.0) -> bool:
         return _normalizar_texto_comparacion(str(val_a)) == _normalizar_texto_comparacion(str(val_b))
 
 
+def _comparar_nombres(val_a, val_b) -> bool:
+    """
+    Compara nombres de personas TOLERANDO el orden de las palabras — en
+    Colombia el CTL y la cédula suelen escribir "APELLIDOS NOMBRES"
+    (ej. "RODRIGUEZ DOMINGUEZ FRANCISCO EDUARDO") mientras que el Informe AF
+    u otros documentos lo escriben en orden natural ("Francisco Eduardo
+    Rodriguez Dominguez") — con comparación exacta de texto esto se marcaría
+    como inconsistencia aunque sea la misma persona. Se compara por el
+    CONJUNTO de palabras: coinciden si son el mismo conjunto, o si uno es
+    subconjunto del otro (tolera que falte un segundo nombre/apellido).
+    """
+    if val_a is None or val_b is None:
+        return True
+    tokens_a = set(_normalizar_texto_comparacion(str(val_a)).split())
+    tokens_b = set(_normalizar_texto_comparacion(str(val_b)).split())
+    if not tokens_a or not tokens_b:
+        return True
+    return tokens_a == tokens_b or tokens_a <= tokens_b or tokens_b <= tokens_a
+
+
 def _fmt(val) -> str:
     """Formatea un valor numérico como COP legible o lo devuelve tal cual."""
     if val is None:
@@ -826,7 +852,7 @@ def analizar_paquete(documentos: dict) -> dict:
     filas_cotejo = []
     incoherencias = []
 
-    def fila(dato, vals: dict):
+    def fila(dato, vals: dict, comparador=_comparar):
         valores_presentes = {k: v for k, v in vals.items() if v is not None}
         valores_lista = list(valores_presentes.values())
 
@@ -836,7 +862,7 @@ def analizar_paquete(documentos: dict) -> dict:
             consistente = "✅"
             ref = valores_lista[0]
             for v in valores_lista[1:]:
-                if not _comparar(ref, v):
+                if not comparador(ref, v):
                     consistente = "❌"
                     break
 
@@ -874,7 +900,7 @@ def analizar_paquete(documentos: dict) -> dict:
         "Inventario": inv.get("propietario"),
         "CTL": ctl.get("propietario"),
         "Poder Forestal": pod.get("propietario"),
-    })
+    }, comparador=_comparar_nombres)
     # Una fila POR CADA cédula subida (puede haber más de una en el mismo
     # paquete — ej. la del propietario y la de otra persona/cónyuge — y cada
     # una se compara por separado contra el propietario ya identificado en
@@ -885,7 +911,7 @@ def analizar_paquete(documentos: dict) -> dict:
             "CTL": ctl.get("propietario"),
             "Poder Forestal": pod.get("propietario"),
             "Cédula (IA)": _formatear_cedula(datos_ced),
-        })
+        }, comparador=_comparar_nombres)
     fila("🏷️ Matrícula Inmobiliaria", {
         "Informe AF": af.get("matricula"),
         "CTL": ctl.get("matricula"),
