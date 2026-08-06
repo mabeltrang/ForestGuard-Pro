@@ -13,6 +13,55 @@ import re
 from ctl_cus_checker import extraer_matriculas, extraer_titulares_ctl
 from poder_forestal_checker import extraer_propietario_poder
 
+# Patrón para extraer el propietario del predio del Informe AF, ANCLADO a la
+# palabra "propietario/a" en una ventana corta (sin cruzar punto ni salto de
+# línea) justo antes del nombre. Esto es DELIBERADAMENTE más estricto que un
+# "identificado con C.C./NIT ..." genérico: el Informe AF suele mencionar
+# también el NIT de Unergy, la C.C. del representante legal y la del
+# ingeniero forestal a cargo — sin este anclaje, esos tres terminan
+# apareciendo (incorrectamente) como si fueran "el propietario".
+_PATRON_PROPIETARIO_ANCLADO = re.compile(
+    r"propietari[ao]s?\b[^.\n]{0,50}?"
+    r"([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ\-\. ]{3,70}?)"
+    r"\s*,?\s*identificad[oa]?\s+con\s+"
+    r"(C\.?\s?C\.?|NIT|C\.?E\.?|Ced(?:ula)?)\.?\s*([\d.,\-]+)",
+    re.IGNORECASE,
+)
+
+_PREFIJOS_TRATAMIENTO_PROPIETARIO = re.compile(
+    r"^(la\s+se[ñn]ora|el\s+se[ñn]or(?:\(a\))?|la\s+sociedad|el\s+se[ñn]or\s*a)\s+",
+    re.IGNORECASE,
+)
+
+
+def _primer_propietario_anclado(texto: str) -> list:
+    """
+    Retorna [{'nombre','tipo_id','numero_id'}] con SOLO la primera mención
+    de "propietario ... identificado con C.C./NIT ..." (nunca todas), para
+    no mezclar al dueño real del predio con otras personas/entidades que el
+    documento también identifica (representante legal, ingeniero, Unergy).
+
+    El texto se normaliza a espacios simples antes de buscar: el texto
+    extraído de PDF/DOCX frecuentemente parte un nombre en dos líneas por
+    ajuste de línea (ej. "Ana Maria Torres\\nGutierrez"), y sin esto el
+    patrón fallaría en encontrar nombres que se ven perfectamente normales
+    para una persona pero que en el texto crudo quedaron con un salto de
+    línea en medio.
+    """
+    texto_plano = re.sub(r"\s+", " ", texto)
+    m = _PATRON_PROPIETARIO_ANCLADO.search(texto_plano)
+    if not m:
+        return []
+    nombre_raw, tipo_id, numero_id = m.groups()
+    nombre = _PREFIJOS_TRATAMIENTO_PROPIETARIO.sub("", nombre_raw).strip(" ,.")
+    if not nombre:
+        return []
+    return [{
+        "nombre": nombre,
+        "tipo_id": tipo_id.replace(" ", "").upper().rstrip("."),
+        "numero_id": numero_id.strip(" ,."),
+    }]
+
 # Costo de instalación de referencia para UNA sola minigranja solar (según tabla
 # de costos estándar de Unergy). El costo total reportado en el FUN/Costos debe
 # ser este valor multiplicado por la cantidad de minigranjas del proyecto.
@@ -242,22 +291,17 @@ def _extraer_texto(patron: str, texto: str, flags=re.IGNORECASE) -> str | None:
     return m.group(1).strip() if m else None
 
 
-def _formatear_propietarios(lista: list) -> str | None:
+def _formatear_propietarios(lista: list, max_nombres: int = 3) -> str | None:
     """
-    [{'nombre','tipo_id','numero_id'}, ...] -> 'NOMBRE (TIPO NUMERO); ...'
-    El número de identificación se deja solo con dígitos (sin puntos/guiones)
-    y el tipo sin puntos (CC en vez de C.C) para que la comparación entre
-    documentos no falle solo por formato — incluyendo contra el resultado de
-    la cédula leída por IA, que siempre devuelve el tipo sin puntos.
+    [{'nombre','tipo_id','numero_id'}, ...] -> 'NOMBRE' o 'NOMBRE1, NOMBRE2'
+    si hay varios copropietarios reales (ej. detectados en el CTL). Se
+    muestra SOLO el nombre — sin tipo/número de identificación — para que la
+    tabla de cotejo sea fácil de leer; la identificación se sigue usando
+    internamente donde se necesita comparar con más precisión.
     """
     if not lista:
         return None
-    partes = []
-    for p in lista:
-        numero_limpio = re.sub(r"\D", "", p.get("numero_id", "") or "")
-        tipo_limpio = (p.get("tipo_id", "") or "").replace(".", "")
-        partes.append(f"{p['nombre']} ({tipo_limpio} {numero_limpio})".strip())
-    return "; ".join(partes)
+    return ", ".join(p["nombre"] for p in lista[:max_nombres] if p.get("nombre"))
 
 
 def _primera_matricula(lista: list) -> str | None:
@@ -265,17 +309,10 @@ def _primera_matricula(lista: list) -> str | None:
 
 
 def _formatear_cedula(datos: dict | None) -> str | None:
-    """
-    Formatea el resultado de cedula_checker.extraer_datos_cedula() al mismo
-    formato 'NOMBRE (TIPO NUMERO)' usado por _formatear_propietarios(), para
-    que la fila del cotejo pueda comparar cédula vs. Informe AF/CTL/Poder
-    con el mismo criterio de igualdad de texto.
-    """
+    """Muestra solo el nombre leído de la cédula (sin tipo/número de ID)."""
     if not datos or not datos.get("nombre"):
         return None
-    numero_limpio = re.sub(r"\D", "", datos.get("numero_identificacion") or "")
-    tipo = (datos.get("tipo_documento") or "").replace(".", "").strip()
-    return f"{datos['nombre']} ({tipo} {numero_limpio})".strip()
+    return datos["nombre"].strip()
 
 
 # ---------------------------------------------------------------------------
@@ -400,10 +437,11 @@ def extraer_informe_af(texto: str) -> dict:
     r["num_minigranjas"] = _contar_minigranjas(texto)
 
     # Propietario del predio + su identificación + matrícula inmobiliaria, si
-    # el Informe AF los menciona (frecuente: "...con la autorización del
-    # propietario, el señor X identificado con C.C. Y..." y "...predio con
-    # matrícula inmobiliaria No. Z...").
-    titulares_af = extraer_propietario_poder(texto)
+    # el Informe AF los menciona. Se usa el patrón ANCLADO a la palabra
+    # "propietario" (no el genérico de Poder Forestal) porque este documento
+    # también identifica con C.C./NIT a otras personas (representante legal,
+    # ingeniero forestal, la propia Unergy) que NO son el dueño del predio.
+    titulares_af = _primer_propietario_anclado(texto)
     r["propietario"] = _formatear_propietarios(titulares_af)
     r["matricula"] = _primera_matricula(extraer_matriculas(texto))
 
@@ -414,7 +452,9 @@ def extraer_ctl(texto: str) -> dict:
     """CTL — Certificado de Tradición y Libertad de Matrícula Inmobiliaria."""
     r = {}
     r["matricula"] = _primera_matricula(extraer_matriculas(texto))
-    r["propietario"] = _formatear_propietarios(extraer_titulares_ctl(texto))
+    # Máximo 2 titulares (copropiedad real, ej. cónyuges) — evita que un
+    # posible falso positivo del patrón de respaldo (prosa) infle la lista.
+    r["propietario"] = _formatear_propietarios(extraer_titulares_ctl(texto)[:2])
     r["municipio"] = _extraer_texto(
         r"municipio\s*:?\s*(?:de\s+)?([A-Za-záéíóúÁÉÍÓÚñÑ]+(?:[ ][A-Za-záéíóúÁÉÍÓÚñÑ]+){0,3})", texto
     )
@@ -432,9 +472,16 @@ def extraer_cus(texto: str) -> dict:
 
 
 def extraer_poder(texto: str) -> dict:
-    """Poder Forestal — propietario, su identificación y la matrícula que autoriza."""
+    """
+    Poder Forestal — propietario/poderdante, su identificación y la matrícula
+    que autoriza. Se toma SOLO la primera persona identificada en el texto
+    (el poderdante, mencionado al inicio: "Yo, NOMBRE, identificado con..."),
+    no todas — el poder también suele identificar más adelante al apoderado
+    (Unergy) con su NIT, que no debe aparecer como si fuera el propietario.
+    """
     r = {}
-    r["propietario"] = _formatear_propietarios(extraer_propietario_poder(texto))
+    todos = extraer_propietario_poder(texto)
+    r["propietario"] = _formatear_propietarios(todos[:1])
     r["matricula"] = _primera_matricula(extraer_matriculas(texto))
     return r
 
@@ -824,6 +871,7 @@ def analizar_paquete(documentos: dict) -> dict:
     })
     fila("👤 Propietario del predio", {
         "Informe AF": af.get("propietario"),
+        "Inventario": inv.get("propietario"),
         "CTL": ctl.get("propietario"),
         "Poder Forestal": pod.get("propietario"),
     })
