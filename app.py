@@ -10,6 +10,7 @@ from fecha_checker import extraer_fecha_documento, evaluar_vigencia
 from propietario_checker import extraer_propietario_xlsx
 from cedula_checker import extraer_datos_cedula
 from document_vision import extraer_ctl_vision, extraer_cus_vision, extraer_poder_vision
+from oficio_checklist import verificar_checklist_oficio
 
 # ---------------------------------------------------------------------------
 # CONFIGURACIÓN
@@ -260,6 +261,30 @@ if uploaded_files:
                     if tmp_path and os.path.exists(tmp_path):
                         os.remove(tmp_path)
             documentos_datos[tipo] = datos
+
+    # ---------------------------------------------------------------------------
+    # CHECKLIST SEGÚN EL OFICIO: ¿falta algún documento que el Oficio dice anexar?
+    # ---------------------------------------------------------------------------
+    nombre_oficio = next((n for n, t in asignaciones.items() if t == "OFICIO"), None)
+    if nombre_oficio and documentos_texto.get(nombre_oficio):
+        checklist = verificar_checklist_oficio(documentos_texto[nombre_oficio], asignaciones)
+        if checklist:
+            st.markdown("---")
+            st.subheader("📋 Checklist según el Oficio")
+            faltantes = [c for c in checklist if not c["encontrado"]]
+            for c in checklist:
+                if c["encontrado"]:
+                    st.markdown(
+                        f"✅ {c['item']}  \n"
+                        f"<span style='font-size:12px;color:#666;'>→ {c['evidencia']}</span>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(f"❌ **{c['item']}** — no se encontró en los documentos subidos")
+            if faltantes:
+                st.warning(f"⚠️ Faltan {len(faltantes)} documento(s) que el Oficio dice anexar.")
+            else:
+                st.success("✅ Todos los documentos que el Oficio dice anexar están presentes.")
 
     # ---------------------------------------------------------------------------
     # DETALLE: RESALTADO AMARILLO Y VIGENCIA DE FECHAS
