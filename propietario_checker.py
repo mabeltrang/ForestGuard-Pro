@@ -24,8 +24,11 @@ from docx import Document
 _PATRON_PROPIETARIO = re.compile(
     r"propietari[ao]s?\b.{0,60}?"
     r"([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ0-9&.\- ]{3,80}?)"
-    r"\s*,?\s*identificad[oa]?\s+con\s+"
-    r"(C\.?\s?C\.?|NIT|C\.?E\.?|Ced(?:ula)?)\.?\s*([\d.,\-]+)",
+    r"\s*,?\s*identificad[oa]?(?:/[oa])?\s+con\s+(?:la\s+|el\s+)?"
+    r"(C\.?\s?C\.?|NIT|C\.?E\.?|C[eé]d(?:ula)?)\.?\s*"
+    r"(?:de\s+[Cc]iudadan[ií]a|de\s+[Ee]xtranjer[ií]a)?\s*"
+    r"(?:n[uú]mero|no\.?|n[°º])?\s*[:\-]?\s*"
+    r"([\d.,\-]+)",
     re.IGNORECASE,
 )
 
