@@ -50,7 +50,15 @@ def _similitud(a: str, b: str) -> float:
     ratio = difflib.SequenceMatcher(None, a_norm, b_norm).ratio()
     if a_norm in b_norm or b_norm in a_norm:
         ratio = max(ratio, 0.9)
-    return ratio
+    # Comparación adicional por palabras ordenadas alfabéticamente: el CTL
+    # del SNR pone "APELLIDOS NOMBRES" mientras el Informe AF/Inventario
+    # suelen poner "Nombres Apellidos" — sin esto, "SIERRA SEVERICHE MANUEL
+    # ANTONIO" vs. "Manuel Antonio Sierra Severiche" da falso negativo pese
+    # a ser la misma persona.
+    a_tokens = " ".join(sorted(a_norm.split()))
+    b_tokens = " ".join(sorted(b_norm.split()))
+    ratio_tokens = difflib.SequenceMatcher(None, a_tokens, b_tokens).ratio()
+    return max(ratio, ratio_tokens)
 
 
 def _normalizar_matricula(m: str) -> str:
@@ -133,15 +141,33 @@ _PATRON_TITULAR_PROSA = re.compile(
 # Formato clásico SNR (Superintendencia de Notariado y Registro): el CTL es
 # un historial de "ANOTACION"es de transacciones, cada una con
 # "PERSONAS QUE INTERVIENEN EN EL ACTO ... DE: <transfiere> / A: <recibe>
-# CC#/NIT# <numero> X" (la "X" marca a quien queda como Titular de derecho
-# real de dominio tras ese acto). El titular VIGENTE es quien aparece en el
-# último "A: ... X" del documento — las anotaciones son cronológicas, así
-# que la última refleja el estado actual de esta matrícula.
+# [CC#/NIT# <numero>] X" (la "X" marca a quien queda como Titular de derecho
+# real de dominio tras ese acto). El número de identificación es OPCIONAL:
+# en CTLs de predios rurales antiguos el SNR a veces solo pone el nombre y
+# la "X", sin CC#/NIT# (ej. "A: SIERRA SEVERICHE MANUEL ANTONIO        X").
+# El titular VIGENTE es quien aparece en el último "A: ... X" del
+# documento — las anotaciones son cronológicas, así que la última refleja
+# el estado actual de esta matrícula.
 _PATRON_TITULAR_ANOTACION = re.compile(
     r"^\s*A:\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ \.]{2,80}?)\s+"
-    r"(CC|NIT|C\.?E\.?)#\s*([\d]+)\s*X\b",
+    r"(?:(CC|NIT|C\.?E\.?)#\s*([\d]+)\s*)?X\b",
     re.IGNORECASE | re.MULTILINE,
 )
+
+# Para ubicar el bloque de la ÚLTIMA anotación (puede tener varios "A: ... X"
+# a la vez, ej. copropiedad/herencia repartida entre varias personas en el
+# mismo acto — no basta con quedarse con el último match del documento
+# completo, porque eso perdería a los demás copropietarios vigentes).
+_PATRON_BLOQUE_ANOTACION = re.compile(r"ANOTACION:\s*Nro\.?\s*\d+", re.IGNORECASE)
+
+
+def _ultimo_bloque_anotacion(texto: str) -> Optional[str]:
+    """Devuelve el texto desde el inicio de la última 'ANOTACION: Nro X' en
+    adelante (hasta el final del documento), o None si no hay ninguna."""
+    bloques = list(_PATRON_BLOQUE_ANOTACION.finditer(texto))
+    if not bloques:
+        return None
+    return texto[bloques[-1].start():]
 
 
 def extraer_titulares_ctl(texto: str) -> list:
@@ -168,15 +194,21 @@ def extraer_titulares_ctl(texto: str) -> list:
         hallazgos.append({"nombre": nombre, "tipo_id": tipo_id, "numero_id": numero_id})
 
     if not hallazgos:
-        anotaciones = list(_PATRON_TITULAR_ANOTACION.finditer(texto))
-        if anotaciones:
-            m = anotaciones[-1]  # la última anotación = el titular vigente
-            nombre = m.group(1).strip(" ,.")
-            hallazgos.append({
-                "nombre": nombre,
-                "tipo_id": m.group(2).replace(".", "").upper(),
-                "numero_id": m.group(3),
-            })
+        # Se busca dentro del bloque de la ÚLTIMA anotación (no de todo el
+        # documento) para capturar a TODOS los titulares vigentes cuando el
+        # acto final reparte el dominio entre varias personas a la vez
+        # (copropiedad/herencia), en vez de quedarse solo con el último "A:".
+        bloque = _ultimo_bloque_anotacion(texto)
+        if bloque:
+            for m in _PATRON_TITULAR_ANOTACION.finditer(bloque):
+                nombre = m.group(1).strip(" ,.")
+                tipo_id = (m.group(2) or "").replace(".", "").upper()
+                numero_id = m.group(3) or ""
+                clave = (nombre.upper(), numero_id)
+                if clave in vistos or not nombre:
+                    continue
+                vistos.add(clave)
+                hallazgos.append({"nombre": nombre, "tipo_id": tipo_id, "numero_id": numero_id})
 
     if not hallazgos:
         # Respaldo en prosa: se normaliza a espacios simples porque un
