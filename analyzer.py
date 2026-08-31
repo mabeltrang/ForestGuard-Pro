@@ -23,8 +23,11 @@ from poder_forestal_checker import extraer_propietario_poder
 _PATRON_PROPIETARIO_ANCLADO = re.compile(
     r"propietari[ao]s?\b[^.\n]{0,50}?"
     r"([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ\-\. ]{3,70}?)"
-    r"\s*,?\s*identificad[oa]?\s+con\s+"
-    r"(C\.?\s?C\.?|NIT|C\.?E\.?|Ced(?:ula)?)\.?\s*([\d.,\-]+)",
+    r"\s*,?\s*identificad[oa]?(?:/[oa])?\s+con\s+(?:la\s+|el\s+)?"
+    r"(C\.?\s?C\.?|NIT|C\.?E\.?|C[eé]d(?:ula)?)\.?\s*"
+    r"(?:de\s+[Cc]iudadan[ií]a|de\s+[Ee]xtranjer[ií]a)?\s*"
+    r"(?:n[uú]mero|no\.?|n[°º])?\s*[:\-]?\s*"
+    r"([\d.,\-]+)",
     re.IGNORECASE,
 )
 
