@@ -119,7 +119,15 @@ def _similitud(a: str, b: str) -> float:
     ratio = difflib.SequenceMatcher(None, a_norm, b_norm).ratio()
     if a_norm in b_norm or b_norm in a_norm:
         ratio = max(ratio, 0.9)
-    return ratio
+    # Comparación adicional por palabras ordenadas alfabéticamente: el mismo
+    # nombre suele venir en distinto orden según el documento (ej. el CTL del
+    # SNR pone "APELLIDOS NOMBRES" mientras el Informe AF pone "Nombres
+    # Apellidos") — sin esto, "SIERRA SEVERICHE MANUEL ANTONIO" vs. "Manuel
+    # Antonio Sierra Severiche" da falso negativo pese a ser la misma persona.
+    a_tokens = " ".join(sorted(a_norm.split()))
+    b_tokens = " ".join(sorted(b_norm.split()))
+    ratio_tokens = difflib.SequenceMatcher(None, a_tokens, b_tokens).ratio()
+    return max(ratio, ratio_tokens)
 
 
 def comparar_propietario(valor_inventario: Optional[str], propietarios_docx: list, umbral: float = 0.6) -> dict:
