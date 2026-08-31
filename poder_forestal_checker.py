@@ -34,13 +34,21 @@ from ctl_cus_checker import (
     _normalizar_matricula,
 )
 
-# Mismo patrón de prosa "identificado con C.C./NIT/C.E." usado en
+# Mismo patrón de prosa "identificado con C.C./NIT/C.E./Cédula" usado en
 # propietario_checker.py y ctl_cus_checker.py — el Poder Forestal casi
-# siempre trae al propietario/poderdante mencionado así.
+# siempre trae al propietario/poderdante mencionado así. Contempla variantes
+# reales de redacción de los poderes de Unergy:
+#   - "identificado/a con" (con la barra "/a")
+#   - "Cédula" con tilde (no solo "Ced"/"C.C.")
+#   - "la Cédula de Ciudadanía No. X" (artículo + "de Ciudadanía/Extranjería"
+#     + "No."/"Número" intercalados antes del número, no pegado al tipo de doc)
 _PATRON_PROPIETARIO_PODER = re.compile(
     r"([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ0-9&.\- ]{3,80}?)"
-    r"\s*,?\s*identificad[oa]?\s+con\s+"
-    r"(C\.?\s?C\.?|NIT|C\.?E\.?|Ced(?:ula)?)\.?\s*([\d.,\-]+)",
+    r"\s*,?\s*identificad[oa]?(?:/[oa])?\s+con\s+(?:la\s+|el\s+)?"
+    r"(C\.?\s?C\.?|NIT|C\.?E\.?|C[eé]d(?:ula)?)\.?\s*"
+    r"(?:de\s+[Cc]iudadan[ií]a|de\s+[Ee]xtranjer[ií]a)?\s*"
+    r"(?:n[uú]mero|no\.?|n[°º])?\s*[:\-]?\s*"
+    r"([\d.,\-]+)",
     re.IGNORECASE,
 )
 
