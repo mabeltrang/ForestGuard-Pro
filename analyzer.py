@@ -443,6 +443,7 @@ def extraer_informe_af(texto: str) -> dict:
     # ingeniero forestal, la propia Unergy) que NO son el dueño del predio.
     titulares_af = _primer_propietario_anclado(texto)
     r["propietario"] = _formatear_propietarios(titulares_af)
+    r["propietario_id"] = titulares_af[0].get("numero_id") if titulares_af else None
     r["matricula"] = _primera_matricula(extraer_matriculas(texto))
 
     return r
@@ -454,7 +455,15 @@ def extraer_ctl(texto: str) -> dict:
     r["matricula"] = _primera_matricula(extraer_matriculas(texto))
     # Máximo 2 titulares (copropiedad real, ej. cónyuges) — evita que un
     # posible falso positivo del patrón de respaldo (prosa) infle la lista.
-    r["propietario"] = _formatear_propietarios(extraer_titulares_ctl(texto)[:2])
+    titulares_ctl = extraer_titulares_ctl(texto)[:2]
+    r["propietario"] = _formatear_propietarios(titulares_ctl)
+    # Número de identificación del titular — OPCIONAL: muchos CTL de predios
+    # rurales antiguos no lo incluyen en la anotación (solo nombre + "X"),
+    # en ese caso queda en None y la fila de cotejo simplemente no compara
+    # por número para este documento (ver _comparar_ids).
+    r["propietario_id"] = next(
+        (t.get("numero_id") for t in titulares_ctl if t.get("numero_id")), None
+    )
     r["municipio"] = _extraer_texto(
         r"municipio\s*:?\s*(?:de\s+)?([A-Za-záéíóúÁÉÍÓÚñÑ]+(?:[ ][A-Za-záéíóúÁÉÍÓÚñÑ]+){0,3})", texto
     )
@@ -482,6 +491,7 @@ def extraer_poder(texto: str) -> dict:
     r = {}
     todos = extraer_propietario_poder(texto)
     r["propietario"] = _formatear_propietarios(todos[:1])
+    r["propietario_id"] = todos[0].get("numero_id") if todos else None
     r["matricula"] = _primera_matricula(extraer_matriculas(texto))
     return r
 
@@ -566,6 +576,9 @@ def extraer_aptitud_suelo(texto: str) -> dict:
     r["municipio"] = _extraer_texto(
         r"municipio\s*:?\s*(?:de\s+)?([A-Za-záéíóúÁÉÍÓÚñÑ]+(?:[ ][A-Za-záéíóúÁÉÍÓÚñÑ]+){0,3})", texto
     )
+    # El Informe de Aptitud del Suelo también suele citar la matrícula
+    # inmobiliaria del predio — se agrega al cruce contra Informe AF/CTL/CUS.
+    r["matricula"] = _primera_matricula(extraer_matriculas(texto))
     return r
 
 
@@ -794,6 +807,23 @@ def _comparar(val_a, val_b, tolerancia_pct: float = 1.0) -> bool:
         return _normalizar_texto_comparacion(str(val_a)) == _normalizar_texto_comparacion(str(val_b))
 
 
+def _comparar_ids(val_a, val_b) -> bool:
+    """
+    Compara números de identificación (cédula/NIT) ignorando puntos, guiones
+    o espacios. Si a cualquiera de los dos lados le falta el número (None o
+    vacío, algo común porque no todos los CTL/Informe AF lo incluyen), se
+    considera "sin inconsistencia" — no hay base para comparar, no es un
+    error. Sirve para una verificación más fuerte que el nombre: dos personas
+    distintas rara vez comparten cédula, así que si los números no calzan es
+    señal clara de que se debe revisar a mano.
+    """
+    a = re.sub(r"\D", "", str(val_a)) if val_a is not None else ""
+    b = re.sub(r"\D", "", str(val_b)) if val_b is not None else ""
+    if not a or not b:
+        return True
+    return a == b
+
+
 def _comparar_nombres(val_a, val_b) -> bool:
     """
     Compara nombres de personas TOLERANDO el orden de las palabras — en
@@ -912,8 +942,21 @@ def analizar_paquete(documentos: dict) -> dict:
             "Poder Forestal": pod.get("propietario"),
             "Cédula (IA)": _formatear_cedula(datos_ced),
         }, comparador=_comparar_nombres)
+        # Verificación adicional por NÚMERO de identificación (más estricta
+        # que el nombre) — solo se compara cuando ambos lados realmente
+        # tienen un número disponible; si el CTL/Informe AF no lo trae
+        # (frecuente en CTL de predios rurales antiguos), la fila queda "—".
+        cedula_id = (datos_ced or {}).get("numero_identificacion")
+        if cedula_id or af.get("propietario_id") or ctl.get("propietario_id") or pod.get("propietario_id"):
+            fila(f"🪪 Cédula — {nombre_archivo} (No. identificación)", {
+                "Informe AF": af.get("propietario_id"),
+                "CTL": ctl.get("propietario_id"),
+                "Poder Forestal": pod.get("propietario_id"),
+                "Cédula (IA)": cedula_id,
+            }, comparador=_comparar_ids)
     fila("🏷️ Matrícula Inmobiliaria", {
         "Informe AF": af.get("matricula"),
+        "Aptitud": apt.get("matricula"),
         "CTL": ctl.get("matricula"),
         "CUS": cus.get("matricula"),
         "Poder Forestal": pod.get("matricula"),
