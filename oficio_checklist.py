@@ -57,7 +57,11 @@ _IGNORAR_PATRONES = [
     {"rut"},
     {"camara", "comercio"},
     {"cedula", "apoderado"},
-    {"tecnico", "forestal"},  # "Documentos del técnico forestal"
+    {"tecnico", "forestal"},     # "Documentos del técnico forestal"
+    {"profesional", "forestal"}, # "Documentos del profesional forestal"
+    {"comprobante", "pago"},
+    {"gdb"},
+    {"cartografia"},
 ]
 
 
