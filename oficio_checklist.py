@@ -62,6 +62,7 @@ _IGNORAR_PATRONES = [
     {"comprobante", "pago"},
     {"gdb"},
     {"cartografia"},
+    {"coordenadas"},
 ]
 
 
