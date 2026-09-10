@@ -220,6 +220,57 @@ def _extraer_numero(patron: str, texto: str, flags=re.IGNORECASE) -> str | None:
     return val if val else None
 
 
+_PATRON_POTENCIA_KWP = re.compile(r"([\d,\.]+)\s*kWp\b", re.IGNORECASE)
+_PATRON_POTENCIA_KW_AC = re.compile(r"([\d,\.]+)\s*kW\b(?!p)", re.IGNORECASE)
+
+
+def _normalizar_potencia_num(val: str) -> str:
+    """
+    Normaliza específicamente valores de potencia (kW/kWp), donde puede
+    haber ambigüedad entre "punto = decimal" y "punto = separador de miles"
+    según qué documento se está leyendo (ej. '1.320' vs '1,320' para el
+    mismo valor de 1320 kWp).
+
+    _normalizar_num_str() trata un único punto como separador decimal
+    (correcto para casos como '3.001 ha'), pero para potencia eso no aplica:
+    ninguna minigranja solar tiene una potencia de "1.32 kWp" — es un valor
+    físicamente absurdo (demasiado pequeño) — mientras que "1320 kWp" sí es
+    plausible. Por eso, si tras la normalización estándar queda un único
+    punto seguido de EXACTAMENTE 3 dígitos, se asume que es un separador de
+    miles (formato "1.320") y se elimina, en vez de tratarlo como decimal.
+    """
+    val = _normalizar_num_str(val)
+    if re.fullmatch(r"\d{1,4}\.\d{3}", val):
+        val = val.replace(".", "")
+    return val
+
+
+def _extraer_potencia_kwp(texto: str) -> str | None:
+    """
+    Extrae la potencia del proyecto, priorizando siempre el valor en kWp
+    (potencia pico / DC de los paneles) sobre un valor en kW simple
+    (potencia nominal AC de interconexión).
+
+    Los documentos de un mismo proyecto solar suelen reportar DOS magnitudes
+    distintas y ambas correctas (ej. "996 kW en AC y de 1.320 kWp en DC"):
+    la potencia AC de interconexión es menor que la potencia DC/pico de los
+    paneles por el ratio DC/AC típico de este tipo de diseños. Si un texto
+    solo reporta uno de los dos valores, casi siempre es el de kWp — por
+    eso se usa como criterio principal, con el kW simple como respaldo
+    únicamente si no aparece ningún kWp en el texto.
+
+    Sin esto, comparar "Informe AF" (que suele mencionar ambos, y el primero
+    en aparecer en el texto es el AC) contra "Aptitud" u "Oficio" (que solo
+    mencionan el kWp) genera un falso positivo de inconsistencia, cuando en
+    realidad son dos magnitudes distintas del mismo proyecto, no un error.
+    """
+    kwp = _PATRON_POTENCIA_KWP.findall(texto)
+    if kwp:
+        return _normalizar_potencia_num(kwp[0])
+    kw_ac = _PATRON_POTENCIA_KW_AC.findall(texto)
+    return _normalizar_potencia_num(kw_ac[0]) if kw_ac else None
+
+
 def _extraer_costo_compensacion_total(texto: str) -> str | None:
     """
     Extrae el costo TOTAL de compensación, evitando confundirlo con el valor
@@ -404,8 +455,7 @@ def extraer_informe_af(texto: str) -> dict:
         r"[áa]rea\s+de\s+([\d,\.]+)\s*(?:hect[áa]reas?|ha)\b", texto
     )
 
-    potencias = re.findall(r"([\d,\.]+)\s*k[Ww][Pp]?\b", texto, re.IGNORECASE)
-    r["potencia_kwp"] = _normalizar_num_str(potencias[0]) if potencias else None
+    r["potencia_kwp"] = _extraer_potencia_kwp(texto)
 
     for nombre in ["afinia", "cens", "aire", "air-e", "enel", "celsia", "codensa", "epsa", "chec", "essa"]:
         if nombre in texto.lower():
@@ -562,8 +612,7 @@ def extraer_aptitud_suelo(texto: str) -> dict:
     r["area_ha"] = _extraer_numero(
         r"[áa]rea[^\d]{0,30}([\d,\.]+)\s*(?:hect[áa]reas?|ha\b)", texto
     )
-    potencias = re.findall(r"([\d,\.]+)\s*k[Ww][Pp]?\b", texto, re.IGNORECASE)
-    r["potencia_kwp"] = _normalizar_num_str(potencias[0]) if potencias else None
+    r["potencia_kwp"] = _extraer_potencia_kwp(texto)
 
     for nombre in ["afinia", "cens", "aire", "air-e", "enel", "celsia", "codensa", "epsa", "chec", "essa"]:
         if nombre in texto.lower():
@@ -647,8 +696,7 @@ def extraer_oficio(texto: str) -> dict:
     else:
         r["distribuidora"] = None
 
-    potencias = re.findall(r"([\d,\.]+)\s*k[Ww][Pp]?\b", texto, re.IGNORECASE)
-    r["potencia_kwp"] = _normalizar_num_str(potencias[0]) if potencias else None
+    r["potencia_kwp"] = _extraer_potencia_kwp(texto)
 
     return r
 
