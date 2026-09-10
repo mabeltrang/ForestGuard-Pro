@@ -77,15 +77,21 @@ def _normalizar_matricula(m: str) -> str:
 # EXTRACCIÓN — MATRÍCULA INMOBILIARIA (de CTL o de CUS)
 # ---------------------------------------------------------------------------
 
+# "inmobiliaria" es opcional: el CTL de la SNR también usa el formato de
+# encabezado "Nro Matrícula: 226-991" sin la palabra "inmobiliaria" pegada.
 _PATRON_MATRICULA = re.compile(
-    r"matr[ií]cula(?:s)?\s+inmobiliaria(?:s)?\s*(?:n[uú]mero|no\.?|n[°º])?\s*[:\-]?\s*"
+    r"matr[ií]cula(?:s)?\s*(?:inmobiliaria(?:s)?)?\s*(?:n[uú]mero|no\.?|n[°º])?\s*[:\-]?\s*"
     r"(\d{2,4}\s*-\s*\d{3,10})",
     re.IGNORECASE,
 )
 
 # Fallback: formato suelto "190-108790" sin la palabra "matrícula" pegada
 # justo antes (ej. cuando aparece en un encabezado/tabla separado del rótulo).
-_PATRON_MATRICULA_SUELTA = re.compile(r"\b(\d{3}-\d{4,8})\b")
+# Se exige mínimo 3 dígitos tras el guion (hay matrículas con consecutivo
+# corto, ej. "226-991") y se excluyen coincidencias que sean en realidad un
+# fragmento de un código catastral con varios guiones (ej. "00-66-000-0147-000"),
+# donde "000-0147" cumpliría el formato sin ser una matrícula real.
+_PATRON_MATRICULA_SUELTA = re.compile(r"(?<!\d-)\b(\d{3}-\d{3,8})\b(?!-\d)")
 
 
 def extraer_matriculas(texto: str) -> list:
