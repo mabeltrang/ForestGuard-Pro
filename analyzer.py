@@ -546,6 +546,9 @@ def extraer_poder(texto: str) -> dict:
     todos = extraer_propietario_poder(texto)
     r["propietario"] = _formatear_propietarios(todos[:1])
     r["propietario_id"] = todos[0].get("numero_id") if todos else None
+    # Las demás personas identificadas en el poder (apoderado y, a veces,
+    # el representante de Unergy): sirven para cotejar la cédula del apoderado.
+    r["apoderados"] = todos[1:]
     r["matricula"] = _primera_matricula(extraer_matriculas(texto))
     return r
 
@@ -815,7 +818,7 @@ def clasificar_documento(nombre_archivo: str, texto: str) -> str:
     # detección en nombres como 'CEDULA_MAR.pdf' (quedaría pegado a "mar").
     nombre_espaciado = re.sub(r"[_\-]", " ", nombre_archivo)
     if _PATRON_CEDULA_ARCHIVO.search(nombre_espaciado):
-        return "CEDULA"
+        return "CEDULA_APODERADO" if "apoderad" in nombre_espaciado.lower() else "CEDULA"
 
     # Mismo reemplazo para la clasificación general: sin esto, una palabra
     # clave de varias palabras como "certificado del suelo" nunca encuentra
@@ -833,11 +836,15 @@ def clasificar_documento(nombre_archivo: str, texto: str) -> str:
     es_excel = nombre_archivo.lower().endswith((".xlsx", ".xls"))
     sin_tilde = _normalizar(texto[:6000]).replace("í", "i").replace("ó", "o")
     nombre_epifitas = "epifit" in nombre.replace("í", "i")
+    if nombre_epifitas and re.search(r"\b(bd|base\s+de\s+datos)\b", nombre):
+        return "BD_EPIFITAS"
     if es_excel:
         if "epifita (especie)" in sin_tilde or "morfoespecie" in sin_tilde or (
                 nombre_epifitas and "forofito" in sin_tilde):
             return "BD_EPIFITAS"
-    elif nombre_epifitas or "epifit" in sin_tilde[:1500]:
+    elif nombre_epifitas or (
+            re.search(r"caracterizacion\s+de\s+(?:la\s+)?(?:flora\s+)?epifit", sin_tilde[:800])
+            and "cordial saludo" not in sin_tilde[:2000]):
         # el título del informe habla de epífitas (un Informe AF puede
         # mencionarlas más adelante, pero no en su portada)
         return "EPIFITAS"
@@ -920,6 +927,14 @@ def _comparar_nombres(val_a, val_b) -> bool:
     return tokens_a == tokens_b or tokens_a <= tokens_b or tokens_b <= tokens_a
 
 
+def _limpiar_municipio(v):
+    """'San Pedro Vereda' / 'Gamarra, Cesar' -> 'San Pedro' / 'Gamarra'."""
+    if not v:
+        return v
+    v = re.split(r",|\s+(?:vereda|departamento|corregimiento|dpto)\b", str(v), flags=re.I)[0]
+    return v.strip() or None
+
+
 def _comparar_contiene(val_a, val_b) -> bool:
     """Para textos largos (bioma): coinciden si uno contiene al otro una vez
     normalizados — un documento puede escribir 'Zonobioma Alternohígrico
@@ -956,6 +971,7 @@ def analizar_paquete(documentos: dict) -> dict:
     cus  = documentos.get("CUS", {})
     pod  = documentos.get("PODER", {})
     cedulas = documentos.get("CEDULA_MULTI", {})  # {nombre_archivo: datos_cedula}
+    cedulas_apod = documentos.get("CEDULA_APODERADO_MULTI", {})
     ep   = documentos.get("EPIFITAS", {})
     bd   = documentos.get("BD_EPIFITAS", {})
 
@@ -966,7 +982,7 @@ def analizar_paquete(documentos: dict) -> dict:
     COLUMNAS_DOC = [
         "FUN", "Informe AF", "Inventario", "Plan Comp.", "Aptitud",
         "Costos", "Oficio", "CTL", "CUS", "Poder Forestal", "Cédula (IA)",
-        "Epífitas", "BD Epífitas",
+        "Cédula apoderado (IA)", "Epífitas", "BD Epífitas",
     ]
 
     filas_cotejo = []
@@ -1025,7 +1041,7 @@ def analizar_paquete(documentos: dict) -> dict:
         "Oficio": ofi.get("nombre_proyecto"),
         "Epífitas": ep.get("nombre_proyecto"),
     }, grupo="Proyecto y predio")
-    fila("Municipio", {
+    fila("Municipio", {k: _limpiar_municipio(v) for k, v in {
         "FUN": fun.get("municipio"),
         "Informe AF": af.get("municipio"),
         "Aptitud": apt.get("municipio"),
@@ -1034,7 +1050,7 @@ def analizar_paquete(documentos: dict) -> dict:
         "CUS": cus.get("municipio"),
         "Epífitas": ep.get("municipio"),
         "BD Epífitas": bd.get("municipio"),
-    }, grupo="Proyecto y predio")
+    }.items()}, grupo="Proyecto y predio")
     fila("👤 Propietario del predio", {
         "Informe AF": af.get("propietario"),
         "Inventario": inv.get("propietario"),
@@ -1046,7 +1062,7 @@ def analizar_paquete(documentos: dict) -> dict:
     # una se compara por separado contra el propietario ya identificado en
     # el Informe AF / CTL / Poder, en vez de mezclarlas en una sola columna).
     for nombre_archivo, datos_ced in cedulas.items():
-        fila(f"🪪 Cédula — {nombre_archivo}", {
+        fila(f"🪪 Cédula del propietario — {nombre_archivo}", {
             "Informe AF": af.get("propietario"),
             "CTL": ctl.get("propietario"),
             "Poder Forestal": pod.get("propietario"),
@@ -1058,12 +1074,33 @@ def analizar_paquete(documentos: dict) -> dict:
         # (frecuente en CTL de predios rurales antiguos), la fila queda "—".
         cedula_id = (datos_ced or {}).get("numero_identificacion")
         if cedula_id or af.get("propietario_id") or ctl.get("propietario_id") or pod.get("propietario_id"):
-            fila(f"🪪 Cédula — {nombre_archivo} (No. identificación)", {
+            fila(f"🪪 Cédula del propietario — {nombre_archivo} (No. identificación)", {
                 "Informe AF": af.get("propietario_id"),
                 "CTL": ctl.get("propietario_id"),
                 "Poder Forestal": pod.get("propietario_id"),
                 "Cédula (IA)": cedula_id,
             }, comparador=_comparar_ids, grupo="Propietario")
+    # Cédula del APODERADO: se coteja contra las demás personas del Poder
+    # (no contra el propietario: son personas distintas a propósito).
+    apoderados_poder = pod.get("apoderados") or []
+    for nombre_archivo, datos_ced in cedulas_apod.items():
+        nombre_ced = _formatear_cedula(datos_ced)
+        id_ced = (datos_ced or {}).get("numero_identificacion")
+        mejor = next((a for a in apoderados_poder
+                      if (id_ced and _comparar_ids(a.get("numero_id"), id_ced) and a.get("numero_id"))
+                      or (nombre_ced and _comparar_nombres(a.get("nombre"), nombre_ced))), None)
+        if mejor is None and apoderados_poder:
+            mejor = apoderados_poder[0]
+        fila(f"🪪 Cédula del apoderado — {nombre_archivo}", {
+            "Poder Forestal": (mejor or {}).get("nombre"),
+            "Cédula apoderado (IA)": nombre_ced,
+        }, comparador=_comparar_nombres, grupo="Propietario")
+        if id_ced and (mejor or {}).get("numero_id"):
+            fila(f"🪪 Cédula del apoderado — {nombre_archivo} (No. identificación)", {
+                "Poder Forestal": mejor.get("numero_id"),
+                "Cédula apoderado (IA)": id_ced,
+            }, comparador=_comparar_ids, grupo="Propietario")
+
     fila("🏷️ Matrícula Inmobiliaria", {
         "Informe AF": af.get("matricula"),
         "Aptitud": apt.get("matricula"),
