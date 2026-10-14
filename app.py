@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import tempfile
+import time
 from extractor import extract_text_from_file
 from analyzer import clasificar_documento, extraer_fun, extraer_informe_af, \
     extraer_compensacion, extraer_aptitud_suelo, extraer_costos, extraer_oficio, \
@@ -225,41 +226,71 @@ if uploaded_files:
     documentos_vigencia = {}
     buffers = {f.name: f for f in uploaded_files}
 
+    # Cada archivo se procesa UNA sola vez y queda guardado en la sesión: antes
+    # se volvían a leer todos con cada clic (cambiar un tipo, validar…), y con
+    # 15 documentos eso dejaba la app "pensando" varios minutos.
+    cache_docs = st.session_state.setdefault("_fg_docs", {})
+    pendientes = [f for f in uploaded_files if f"{f.name}|{f.size}" not in cache_docs]
+    if pendientes:
+        barra = st.progress(0.0, text="Leyendo documentos…")
+        for i, file in enumerate(pendientes):
+            clave = f"{file.name}|{file.size}"
+            info = {"texto": "", "tipo": "DESCONOCIDO", "error": None, "tiempos": {},
+                    "resaltado": {"texto": [], "imagenes": [], "anotaciones_pdf": [], "tiene_hallazgos": False},
+                    "vigencia": {"estado": "sin_fecha", "dias": None, "fecha": None}}
+            suffix = os.path.splitext(file.name)[1]
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                    tmp.write(file.getbuffer())
+                    tmp_path = tmp.name
+
+                def paso(nombre_paso, funcion):
+                    barra.progress(i / len(pendientes),
+                                   text=f"({i + 1}/{len(pendientes)}) {file.name} — {nombre_paso}…")
+                    t0 = time.time()
+                    try:
+                        return funcion()
+                    finally:
+                        info["tiempos"][nombre_paso] = round(time.time() - t0, 1)
+
+                info["texto"] = paso("extrayendo texto", lambda: extract_text_from_file(tmp_path))
+                info["tipo"] = clasificar_documento(file.name, info["texto"])
+                # Resaltado amarillo (texto e imágenes) — convención interna para
+                # marcar datos pendientes antes de radicar
+                try:
+                    info["resaltado"] = paso("buscando resaltado amarillo",
+                                             lambda: detectar_resaltado_documento(tmp_path, file.name))
+                except Exception:
+                    pass
+                # Fecha del encabezado y qué tan desactualizada está
+                try:
+                    fecha_doc = paso("leyendo la fecha", lambda: extraer_fecha_documento(tmp_path, file.name))
+                    info["vigencia"] = evaluar_vigencia(fecha_doc)
+                except Exception:
+                    pass
+            except Exception as e:
+                info["error"] = str(e)
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            cache_docs[clave] = info
+        barra.empty()
+
     for file in uploaded_files:
-        suffix = os.path.splitext(file.name)[1]
-        tmp_path = None
-        try:
-            raw_bytes = file.getbuffer()
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                tmp.write(raw_bytes)
-                tmp_path = tmp.name
+        info = cache_docs[f"{file.name}|{file.size}"]
+        if info["error"]:
+            st.error(f"Error procesando {file.name}: {info['error']}")
+        documentos_texto[file.name] = info["texto"]
+        documentos_tipo[file.name] = info["tipo"]
+        documentos_resaltado[file.name] = info["resaltado"]
+        documentos_vigencia[file.name] = info["vigencia"]
 
-            texto = extract_text_from_file(tmp_path)
-            documentos_texto[file.name] = texto
-            tipo = clasificar_documento(file.name, texto)
-            documentos_tipo[file.name] = tipo
-
-            # Resaltado amarillo (texto e imágenes) — convención interna para
-            # marcar datos pendientes antes de radicar
-            try:
-                documentos_resaltado[file.name] = detectar_resaltado_documento(tmp_path, file.name)
-            except Exception:
-                documentos_resaltado[file.name] = {"texto": [], "imagenes": [], "anotaciones_pdf": [], "tiene_hallazgos": False}
-
-            # Fecha del encabezado y qué tan desactualizada está
-            try:
-                fecha_doc = extraer_fecha_documento(tmp_path, file.name)
-                documentos_vigencia[file.name] = evaluar_vigencia(fecha_doc)
-            except Exception:
-                documentos_vigencia[file.name] = {"estado": "sin_fecha", "dias": None, "fecha": None}
-
-        except Exception as e:
-            st.error(f"Error procesando {file.name}: {e}")
-            documentos_tipo[file.name] = "DESCONOCIDO"
-            documentos_texto[file.name] = ""
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                os.remove(tmp_path)
+    lentos = [(f.name, sum(cache_docs[f"{f.name}|{f.size}"]["tiempos"].values())) for f in uploaded_files]
+    lentos = [(n, t) for n, t in lentos if t >= 20]
+    if lentos:
+        st.caption("⏱️ Documentos que tardaron en leerse: " +
+                   ", ".join(f"{n} ({t:.0f} s)" for n, t in sorted(lentos, key=lambda x: -x[1])))
 
     # Clasificación con corrección manual
     tipo_opciones = ["FUN", "INFORME_AF", "INVENTARIO", "COMPENSACION", "APTITUD", "COSTOS", "OFICIO", "CTL", "CUS", "PODER", "CEDULA", "EPIFITAS", "BD_EPIFITAS", "DESCONOCIDO"]
