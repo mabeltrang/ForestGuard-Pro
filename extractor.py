@@ -92,13 +92,23 @@ def extract_text_from_file(file_path: str) -> str:
             # metadatos --proyecto, propietario, ubicación, fecha-- antes de
             # la fila de columnas real) para ubicar la tabla y contar árboles
             # por FILAS DE DATOS, nunca por el valor de la columna ID.
+            fuente = file_path
             try:
-                df_dict_raw = pd.read_excel(file_path, sheet_name=None, header=None)
+                df_dict_raw = pd.read_excel(fuente, sheet_name=None, header=None)
+            except Exception:
+                # Excel con XML inválido (típico de WPS: autofiltro A1:XFD…):
+                # se abre una copia saneada en memoria.
+                from epifitas import excel_saneado
+                fuente = excel_saneado(file_path)
+                df_dict_raw = pd.read_excel(fuente, sheet_name=None, header=None)
+            try:
                 conteos = _detectar_conteo_inventario(df_dict_raw)
             except Exception:
                 conteos = {}
 
-            df_dict = pd.read_excel(file_path, sheet_name=None)
+            if hasattr(fuente, "seek"):
+                fuente.seek(0)
+            df_dict = pd.read_excel(fuente, sheet_name=None)
             for sheet_name, df in df_dict.items():
                 text += f"\n[Hoja: {sheet_name}]\n"
                 if sheet_name in conteos:
