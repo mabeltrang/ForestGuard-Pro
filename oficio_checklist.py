@@ -40,7 +40,10 @@ _TIPO_KEYWORDS = {
     "CTL": {"certificado", "tradicion", "libertad", "ctl", "matricula", "inmobiliaria"},
     "CUS": {"certificacion", "alcaldia", "municipal", "planeacion"},
     "PODER": {"poder", "apoderado"},
-    "CEDULA": {"cedula", "ciudadania", "identidad"},
+    "CEDULA": {"cedula", "ciudadania", "identidad", "propietario", "propietarios"},
+    "CEDULA_APODERADO": {"cedula", "apoderado"},
+    "EPIFITAS": {"caracterizacion", "flora", "epifita", "epifitas"},
+    "BD_EPIFITAS": {"base", "datos", "flora", "epifita", "epifitas"},
 }
 
 _STOPWORDS = {
@@ -56,7 +59,6 @@ _STOPWORDS = {
 _IGNORAR_PATRONES = [
     {"rut"},
     {"camara", "comercio"},
-    {"cedula", "apoderado"},
     {"tecnico", "forestal"},     # "Documentos del técnico forestal"
     {"profesional", "forestal"}, # "Documentos del profesional forestal"
     {"comprobante", "pago"},
