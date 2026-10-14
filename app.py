@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import tempfile
 import time
+import re
 from extractor import extract_text_from_file
 from analyzer import clasificar_documento, extraer_fun, extraer_informe_af, \
     extraer_compensacion, extraer_aptitud_suelo, extraer_costos, extraer_oficio, \
@@ -14,7 +15,8 @@ from document_vision import extraer_ctl_vision, extraer_cus_vision, extraer_pode
 from oficio_checklist import verificar_checklist_oficio
 from analyzer import extraer_epifitas
 from epifitas import extraer_comunes, leer_bd_epifitas
-from ui_cotejo import mostrar_resumen, mostrar_tarjetas, mostrar_epifitas
+from ui_cotejo import (mostrar_resumen, mostrar_tarjetas, mostrar_epifitas, mostrar_checklist,
+                       css_documentos, cabecera_documento, etiqueta_tipo)
 import io
 
 # ---------------------------------------------------------------------------
@@ -61,6 +63,7 @@ LABELS = {
     "CUS": "🌳 CUS",
     "PODER": "📜 Poder Forestal",
     "CEDULA": "🪪 Cédula (IA)",
+    "CEDULA_APODERADO": "🪪 Cédula apoderado (IA)",
     "EPIFITAS": "🌿 Informe de epífitas",
     "BD_EPIFITAS": "📊 BD de epífitas",
     "DESCONOCIDO": "❓ Desconocido",
@@ -293,7 +296,7 @@ if uploaded_files:
                    ", ".join(f"{n} ({t:.0f} s)" for n, t in sorted(lentos, key=lambda x: -x[1])))
 
     # Clasificación con corrección manual
-    tipo_opciones = ["FUN", "INFORME_AF", "INVENTARIO", "COMPENSACION", "APTITUD", "COSTOS", "OFICIO", "CTL", "CUS", "PODER", "CEDULA", "EPIFITAS", "BD_EPIFITAS", "DESCONOCIDO"]
+    tipo_opciones = ["FUN", "INFORME_AF", "INVENTARIO", "COMPENSACION", "APTITUD", "COSTOS", "OFICIO", "CTL", "CUS", "PODER", "CEDULA", "CEDULA_APODERADO", "EPIFITAS", "BD_EPIFITAS", "DESCONOCIDO"]
     asignaciones = {}
 
     ESTADO_VIGENCIA_LABEL = {
@@ -304,51 +307,38 @@ if uploaded_files:
         "sin_fecha": "⚪ sin fecha detectada",
     }
 
-    cols = st.columns([3, 2, 2, 2])
-    with cols[0]:
-        st.markdown("**Archivo**")
-    with cols[1]:
-        st.markdown("**Tipo detectado** (puedes corregir)")
-    with cols[2]:
-        st.markdown("**Fecha encabezado**")
-    with cols[3]:
-        st.markdown("**Resaltado amarillo**")
+    st.caption("Revisa el tipo de cada documento; si alguno quedó mal, cámbialo en su tarjeta.")
+    css_documentos()
 
-    for nombre, tipo_auto in documentos_tipo.items():
-        c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
-        with c1:
-            st.write(f"📎 {nombre}")
-        with c2:
-            idx = tipo_opciones.index(tipo_auto) if tipo_auto in tipo_opciones else tipo_opciones.index("DESCONOCIDO")
-            tipo_final = st.selectbox(
-                label=f"Tipo para {nombre}",
-                options=tipo_opciones,
-                index=idx,
-                key=f"tipo_{nombre}",
-                label_visibility="collapsed"
-            )
-            asignaciones[nombre] = tipo_final
-        with c3:
-            vig = documentos_vigencia.get(nombre, {})
-            if vig.get("fecha"):
-                dias = vig["dias"]
-                st.markdown(
-                    f"{ESTADO_VIGENCIA_LABEL.get(vig['estado'], '⚪')}<br>"
-                    f"<span style='font-size:12px;color:#666;'>{vig['fecha'].strftime('%d/%m/%Y')} · hace {dias} días</span>",
-                    unsafe_allow_html=True,
+    def _orden_natural(nombre):
+        m = re.match(r"\s*(\d+)", nombre)
+        return (int(m.group(1)) if m else 10**6, nombre.lower())
+
+    nombres_ordenados = sorted(documentos_tipo, key=_orden_natural)
+    columnas_docs = st.columns(3)
+    for i, nombre in enumerate(nombres_ordenados):
+        tipo_auto = documentos_tipo[nombre]
+        with columnas_docs[i % 3]:
+            with st.container(border=True):
+                actual = st.session_state.get(f"tipo_{nombre}", tipo_auto)
+                res = documentos_resaltado.get(nombre, {})
+                n_hallazgos = len(res.get("texto", [])) + len(res.get("imagenes", [])) + len(res.get("anotaciones_pdf", []))
+                st.markdown(cabecera_documento(actual, nombre, documentos_vigencia.get(nombre, {}), n_hallazgos),
+                            unsafe_allow_html=True)
+                idx = tipo_opciones.index(tipo_auto) if tipo_auto in tipo_opciones else tipo_opciones.index("DESCONOCIDO")
+                asignaciones[nombre] = st.selectbox(
+                    label=f"Tipo para {nombre}",
+                    options=tipo_opciones,
+                    index=idx,
+                    key=f"tipo_{nombre}",
+                    format_func=etiqueta_tipo,
+                    label_visibility="collapsed",
                 )
-            else:
-                st.markdown(ESTADO_VIGENCIA_LABEL["sin_fecha"])
-        with c4:
-            res = documentos_resaltado.get(nombre, {})
-            n_hallazgos = len(res.get("texto", [])) + len(res.get("imagenes", [])) + len(res.get("anotaciones_pdf", []))
-            if n_hallazgos > 0:
-                st.markdown(f"🟨 **{n_hallazgos}** hallazgo(s)")
-            else:
-                st.markdown("—")
+    # mismo orden de subida para el checklist (empareja por orden)
+    asignaciones = {n: asignaciones[n] for n in documentos_tipo}
 
     for nombre, tipo in asignaciones.items():
-        if tipo == "CEDULA":
+        if tipo in ("CEDULA", "CEDULA_APODERADO"):
             cache_key = f"_cedula_cache_{nombre}_{len(buffers[nombre].getvalue())}"
             try:
                 if cache_key not in st.session_state:
@@ -359,7 +349,8 @@ if uploaded_files:
                 # Varias cédulas pueden convivir en el mismo paquete (ej. la
                 # del propietario y la de otra persona) — se guardan todas,
                 # una por archivo, en vez de sobrescribirse entre sí.
-                documentos_datos.setdefault("CEDULA_MULTI", {})[nombre] = st.session_state[cache_key]
+                destino = "CEDULA_MULTI" if tipo == "CEDULA" else "CEDULA_APODERADO_MULTI"
+                documentos_datos.setdefault(destino, {})[nombre] = st.session_state[cache_key]
             except Exception as e:
                 st.warning(f"No se pudo leer la cédula {nombre}: {e}")
         elif tipo in ("CTL", "CUS", "PODER") and not (documentos_texto.get(nombre) or "").strip():
@@ -376,6 +367,9 @@ if uploaded_files:
             except Exception as e:
                 st.warning(f"No se pudo leer {nombre} con IA: {e}")
         elif tipo == "BD_EPIFITAS":
+            if not nombre.lower().endswith((".xlsx", ".xls")):
+                st.caption(f"ℹ️ {nombre}: la BD de epífitas se coteja solo en Excel; en PDF queda como soporte del checklist.")
+                continue
             try:
                 documentos_datos[tipo] = leer_bd_epifitas(io.BytesIO(buffers[nombre].getvalue()))
             except Exception as e:
@@ -414,20 +408,7 @@ if uploaded_files:
         if checklist:
             st.markdown("---")
             st.subheader("📋 Checklist según el Oficio")
-            faltantes = [c for c in checklist if not c["encontrado"]]
-            for c in checklist:
-                if c["encontrado"]:
-                    st.markdown(
-                        f"✅ {c['item']}  \n"
-                        f"<span style='font-size:12px;color:#666;'>→ {c['evidencia']}</span>",
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.markdown(f"❌ **{c['item']}** — no se encontró en los documentos subidos")
-            if faltantes:
-                st.warning(f"⚠️ Faltan {len(faltantes)} documento(s) que el Oficio dice anexar.")
-            else:
-                st.success("✅ Todos los documentos que el Oficio dice anexar están presentes.")
+            mostrar_checklist(checklist)
 
     # ---------------------------------------------------------------------------
     # DETALLE: RESALTADO AMARILLO Y VIGENCIA DE FECHAS
