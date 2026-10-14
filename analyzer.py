@@ -1193,18 +1193,21 @@ def analizar_paquete(documentos: dict) -> dict:
             total, fuente_total = ep.get("arboles_influencia"), "Informe de epífitas"
         else:
             total, fuente_total = af.get("individuos"), "Informe AF"
-        forofitos = ep.get("forofitos") or bd.get("forofitos")
+        # La BD manda cuando está: ahí se eligen qué códigos son árboles del
+        # inventario (Pl-/PI-) y cuáles no (MPC-…); el informe solo trae el total.
+        forofitos = bd.get("forofitos") or ep.get("forofitos")
         epifitas = {
             "arboles": int(float(total)) if total else None,
             "fuente_arboles": fuente_total,
             "forofitos": int(float(forofitos)) if forofitos else None,
-            "fuente_forofitos": "Informe de epífitas" if ep.get("forofitos") else "BD de epífitas",
+            "fuente_forofitos": "BD de epífitas" if bd.get("forofitos") else "Informe de epífitas",
             "spp_enov": ep.get("spp_enov") or bd.get("spp_enov"),
             "spp_ev": ep.get("spp_ev") or bd.get("spp_ev"),
             "cobertura_cm2": ep.get("cobertura_cm2") or bd.get("cobertura_cm2"),
             "representatividad_pct": ep.get("representatividad_pct"),
             "area_intervenir_ha": ep.get("area_intervenir_ha"),
             "coberturas": ep.get("coberturas") or bd.get("coberturas"),
+            "excluidos": bd.get("_excluidos") if bd.get("forofitos") else None,
         }
 
     # ---- Aritmética ----
