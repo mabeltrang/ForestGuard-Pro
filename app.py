@@ -14,7 +14,7 @@ from cedula_checker import extraer_datos_cedula
 from document_vision import extraer_ctl_vision, extraer_cus_vision, extraer_poder_vision
 from oficio_checklist import verificar_checklist_oficio
 from analyzer import extraer_epifitas
-from epifitas import extraer_comunes, leer_bd_epifitas
+from epifitas import extraer_comunes, leer_bd_epifitas, prefijos_arbol_por_defecto, contar_forofitos
 from ui_cotejo import (mostrar_resumen, mostrar_tarjetas, mostrar_epifitas, mostrar_checklist,
                        css_documentos, cabecera_documento, etiqueta_tipo)
 import io
@@ -371,9 +371,30 @@ if uploaded_files:
                 st.caption(f"ℹ️ {nombre}: la BD de epífitas se coteja solo en Excel; en PDF queda como soporte del checklist.")
                 continue
             try:
-                documentos_datos[tipo] = leer_bd_epifitas(io.BytesIO(buffers[nombre].getvalue()))
+                bd = leer_bd_epifitas(io.BytesIO(buffers[nombre].getvalue()))
             except Exception as e:
                 st.warning(f"No se pudo leer la BD de epífitas {nombre}: {e}")
+                continue
+            prefijos = bd.get("_prefijos") or {}
+            if prefijos:
+                st.markdown("**🌿 BD de epífitas — ¿qué códigos son árboles del inventario?**")
+                elegidos = st.multiselect(
+                    "Códigos que son árboles del inventario forestal",
+                    options=list(prefijos),
+                    default=prefijos_arbol_por_defecto(prefijos),
+                    format_func=lambda p: f"{p}- ({prefijos[p]} forófitos con epífitas)",
+                    key=f"prefijos_{nombre}",
+                    help="Por defecto cuentan solo los códigos P (Pl-, PI-). Los demás (MPC-…) "
+                         "se muestran aparte y no se comparan con el inventario.",
+                    label_visibility="collapsed",
+                )
+                bd["forofitos"] = str(contar_forofitos(bd, elegidos))
+                otros = {p: n for p, n in prefijos.items() if p not in elegidos}
+                bd["_excluidos"] = ", ".join(f"{n} en {p}-" for p, n in otros.items())
+                if "PI" in prefijos and "Pl" in prefijos:
+                    st.caption("⚠️ En la BD aparecen códigos **PI-** (i mayúscula) y **Pl-** (L minúscula). "
+                               "Si son la misma cobertura (pastos limpios), conviene unificarlos.")
+            documentos_datos[tipo] = bd
         elif tipo in EXTRACTORES and documentos_texto.get(nombre):
             datos = EXTRACTORES[tipo](documentos_texto[nombre])
             # Bioma y zona de vida: se buscan en todos los documentos con texto
