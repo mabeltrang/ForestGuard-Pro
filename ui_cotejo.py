@@ -225,3 +225,116 @@ def mostrar_epifitas(ep: dict | None) -> None:
 
     st.markdown(_CSS + f'<div class="fg-epi"><div class="fg-epi-hero">{hero}</div>'
                 f'<div class="fg-mini">{"".join(mini)}</div></div>', unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# Documentos detectados y checklist del Oficio
+# ---------------------------------------------------------------------------
+
+TIPOS_INFO = {
+    "FUN": ("FUN", "Formulario Único Nacional"),
+    "INFORME_AF": ("AF", "Informe de aprovechamiento forestal"),
+    "INVENTARIO": ("INV", "Inventario forestal"),
+    "COMPENSACION": ("PC", "Plan de compensación"),
+    "APTITUD": ("AS", "Aptitud del suelo"),
+    "COSTOS": ("CO", "Costos y presupuesto"),
+    "OFICIO": ("OF", "Oficio de solicitud"),
+    "CTL": ("CTL", "Certificado de tradición y libertad"),
+    "CUS": ("CUS", "Certificado de uso del suelo"),
+    "PODER": ("PF", "Poder forestal"),
+    "CEDULA": ("CC", "Cédula del propietario"),
+    "CEDULA_APODERADO": ("CA", "Cédula del apoderado"),
+    "EPIFITAS": ("EP", "Caracterización de epífitas"),
+    "BD_EPIFITAS": ("BD", "Base de datos de epífitas"),
+    "DESCONOCIDO": ("—", "Otro documento (no se coteja)"),
+}
+
+ABREV["Cédula apoderado (IA)"] = ("CA", "Cédula del apoderado")
+
+_CSS_DOCS = f"""
+<style>
+.fg-doc-cab {{ display:flex; align-items:center; gap:9px; margin-bottom:4px; }}
+.fg-doc-cab b {{ color:{MORADO_OSCURO}; font-size:.95rem; line-height:1.2; }}
+.fg-doc-abrev {{ flex:none; min-width:40px; text-align:center; font-size:.75rem; font-weight:800;
+                padding:5px 7px; border-radius:8px; background:{MORADO}; color:#fff; }}
+.fg-doc-abrev.otro {{ background:{GRIS_FONDO}; color:{GRIS}; }}
+.fg-doc-arch {{ font-size:.78rem; color:{GRIS}; overflow-wrap:anywhere; margin-bottom:7px; }}
+.fg-doc-badges {{ display:flex; flex-wrap:wrap; gap:5px; min-height:24px; }}
+.fg-b {{ font-size:.72rem; font-weight:600; padding:3px 8px; border-radius:999px; }}
+.fg-b.ok {{ background:{VERDE_FONDO}; color:{VERDE}; }}
+.fg-b.warn {{ background:#FFF3D6; color:#8A5A00; }}
+.fg-b.bad {{ background:{ROJO_FONDO}; color:{ROJO}; }}
+.fg-b.gris {{ background:{GRIS_FONDO}; color:{GRIS}; }}
+
+.fg-check-resumen {{ display:flex; align-items:center; gap:14px; margin:.2rem 0 .9rem; }}
+.fg-check-resumen .n {{ font-size:1.6rem; font-weight:800; color:{MORADO_OSCURO}; }}
+.fg-check-resumen .t {{ color:{GRIS}; font-size:.9rem; }}
+.fg-check-barra {{ flex:1; max-width:320px; height:9px; border-radius:999px; background:{GRIS_FONDO}; overflow:hidden; }}
+.fg-check-barra span {{ display:block; height:100%; background:{VERDE}; }}
+.fg-check-grid {{ display:grid; grid-template-columns:repeat(auto-fill, minmax(290px, 1fr)); gap:9px; }}
+.fg-check {{ display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-radius:11px;
+            border:1.5px solid {VERDE_BORDE}; background:#fff; }}
+.fg-check.falta {{ border-color:{ROJO_BORDE}; background:#FFFBFA; }}
+.fg-check .ic {{ flex:none; width:22px; height:22px; border-radius:50%; display:grid; place-items:center;
+                font-size:.75rem; font-weight:800; background:{VERDE_FONDO}; color:{VERDE}; }}
+.fg-check.falta .ic {{ background:{ROJO_FONDO}; color:{ROJO}; }}
+.fg-check .it {{ font-size:.86rem; font-weight:600; color:#2B2B3A; line-height:1.3; }}
+.fg-check .ev {{ font-size:.74rem; color:{GRIS}; margin-top:2px; overflow-wrap:anywhere; }}
+.fg-check.falta .ev {{ color:{ROJO}; }}
+</style>
+"""
+
+
+def css_documentos() -> None:
+    st.markdown(_CSS + _CSS_DOCS, unsafe_allow_html=True)
+
+
+def etiqueta_tipo(tipo: str) -> str:
+    abrev, nombre = TIPOS_INFO.get(tipo, (tipo, tipo))
+    return f"{abrev} · {nombre}" if abrev != "—" else nombre
+
+
+def cabecera_documento(tipo: str, nombre_archivo: str, vigencia: dict, n_resaltado: int) -> str:
+    abrev, nombre = TIPOS_INFO.get(tipo, ("?", tipo))
+    clase = "fg-doc-abrev otro" if tipo == "DESCONOCIDO" else "fg-doc-abrev"
+    badges = []
+    est = (vigencia or {}).get("estado", "sin_fecha")
+    fecha = (vigencia or {}).get("fecha")
+    if fecha:
+        f = fecha.strftime("%d/%m/%Y")
+        badges.append({
+            "vigente": f'<span class="fg-b ok">Vigente · {f}</span>',
+            "revisar": f'<span class="fg-b warn">Revisar antigüedad · {f}</span>',
+            "desactualizado": f'<span class="fg-b bad">Desactualizado · {f}</span>',
+            "fecha_futura": f'<span class="fg-b warn">Fecha futura · {f}</span>',
+        }.get(est, f'<span class="fg-b gris">{f}</span>'))
+    else:
+        badges.append('<span class="fg-b gris">Sin fecha</span>')
+    if n_resaltado:
+        badges.append(f'<span class="fg-b warn">🟨 {n_resaltado} resaltado(s)</span>')
+    return (f'<div class="fg-doc-cab"><span class="{clase}">{_e(abrev)}</span><b>{_e(nombre)}</b></div>'
+            f'<div class="fg-doc-arch">📎 {_e(nombre_archivo)}</div>'
+            f'<div class="fg-doc-badges">{"".join(badges)}</div>')
+
+
+def mostrar_checklist(checklist: list[dict]) -> None:
+    total = len(checklist)
+    ok = sum(c["encontrado"] for c in checklist)
+    pct = ok / total * 100 if total else 0
+    items = []
+    for c in sorted(checklist, key=lambda c: c["encontrado"]):  # faltantes primero
+        if c["encontrado"]:
+            ev = re.sub(r"\s*\([A-Z_]+\)$", "", str(c.get("evidencia") or ""))
+            items.append(f'<div class="fg-check"><span class="ic">✓</span><div>'
+                         f'<div class="it">{_e(c["item"])}</div><div class="ev">{_e(ev)}</div></div></div>')
+        else:
+            items.append(f'<div class="fg-check falta"><span class="ic">✕</span><div>'
+                         f'<div class="it">{_e(c["item"])}</div><div class="ev">No está entre los documentos subidos</div></div></div>')
+    st.markdown(
+        _CSS + _CSS_DOCS
+        + f'<div class="fg-check-resumen"><span class="n">{ok} de {total}</span>'
+        f'<span class="t">documentos que el Oficio dice anexar</span>'
+        f'<span class="fg-check-barra"><span style="width:{pct:.0f}%"></span></span></div>'
+        + f'<div class="fg-check-grid">{"".join(items)}</div>',
+        unsafe_allow_html=True,
+    )
