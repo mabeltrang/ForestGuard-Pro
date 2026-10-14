@@ -198,11 +198,15 @@ def mostrar_epifitas(ep: dict | None) -> None:
         elif sin < 0:
             hero += (f'<div class="alerta">Hay {-sin} forófito(s) más que árboles en el inventario: '
                      f'revisa los conteos.</div>')
+        if ep.get("excluidos"):
+            hero += f'<div class="nota">No cuentan como árboles del inventario: {_e(ep["excluidos"])}.</div>'
         hero += (f'<div class="nota">Árboles: {_e(ep["fuente_arboles"])} · '
                  f'Forófitos: {_e(ep["fuente_forofitos"])}</div>')
     elif foro is not None:
         hero = (f'<div class="n">{foro} <small>forófitos</small></div>'
                 f'<div class="t">con epífitas. Sube el inventario para ver qué porcentaje de los árboles es.</div>')
+        if ep.get("excluidos"):
+            hero += f'<div class="nota">No cuentan como árboles del inventario: {_e(ep["excluidos"])}.</div>'
     else:
         hero = '<div class="t">No se encontró el número de forófitos muestreados en el informe.</div>'
 
