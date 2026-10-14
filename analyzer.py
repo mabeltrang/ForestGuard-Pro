@@ -12,6 +12,7 @@ import re
 
 from ctl_cus_checker import extraer_matriculas, extraer_titulares_ctl
 from poder_forestal_checker import extraer_propietario_poder
+from epifitas import extraer_epifitas_informe
 
 # Patrón para extraer el propietario del predio del Informe AF, ANCLADO a la
 # palabra "propietario/a" en una ventana corta (sin cruzar punto ni salto de
@@ -730,6 +731,14 @@ def extraer_inventario(texto: str) -> dict:
     return r
 
 
+def extraer_epifitas(texto: str) -> dict:
+    """Informe de caracterización de epífitas (EP)."""
+    r = extraer_epifitas_informe(texto)
+    r["nombre_proyecto"] = _extraer_nombre_proyecto(texto)
+    r["matricula"] = _primera_matricula(extraer_matriculas(texto))
+    return r
+
+
 # ---------------------------------------------------------------------------
 # CLASIFICACIÓN
 # ---------------------------------------------------------------------------
@@ -817,6 +826,22 @@ def clasificar_documento(nombre_archivo: str, texto: str) -> str:
     nombre = nombre_espaciado.lower()
     texto_n = _normalizar(texto[:4000])
 
+    # Epífitas: informe (Word/PDF) o base de datos de campo (Excel). Se
+    # detectan antes del puntaje general porque comparten palabras con el
+    # inventario (CAP, DAP, cobertura) y con el FUN ("fun" aparece dentro de
+    # palabras como "fundamental").
+    es_excel = nombre_archivo.lower().endswith((".xlsx", ".xls"))
+    sin_tilde = _normalizar(texto[:6000]).replace("í", "i").replace("ó", "o")
+    nombre_epifitas = "epifit" in nombre.replace("í", "i")
+    if es_excel:
+        if "epifita (especie)" in sin_tilde or "morfoespecie" in sin_tilde or (
+                nombre_epifitas and "forofito" in sin_tilde):
+            return "BD_EPIFITAS"
+    elif nombre_epifitas or "epifit" in sin_tilde[:1500]:
+        # el título del informe habla de epífitas (un Informe AF puede
+        # mencionarlas más adelante, pero no en su portada)
+        return "EPIFITAS"
+
     puntajes = {tipo: 0 for tipo in TIPOS}
 
     for tipo, palabras_clave in TIPOS.items():
@@ -895,6 +920,17 @@ def _comparar_nombres(val_a, val_b) -> bool:
     return tokens_a == tokens_b or tokens_a <= tokens_b or tokens_b <= tokens_a
 
 
+def _comparar_contiene(val_a, val_b) -> bool:
+    """Para textos largos (bioma): coinciden si uno contiene al otro una vez
+    normalizados — un documento puede escribir 'Zonobioma Alternohígrico
+    Tropical' y otro agregar 'Magdalena Medio y Depresión Momposina'."""
+    if val_a is None or val_b is None:
+        return True
+    a = _normalizar_texto_comparacion(str(val_a))
+    b = _normalizar_texto_comparacion(str(val_b))
+    return a in b or b in a
+
+
 def _fmt(val) -> str:
     """Formatea un valor numérico como COP legible o lo devuelve tal cual."""
     if val is None:
@@ -920,6 +956,8 @@ def analizar_paquete(documentos: dict) -> dict:
     cus  = documentos.get("CUS", {})
     pod  = documentos.get("PODER", {})
     cedulas = documentos.get("CEDULA_MULTI", {})  # {nombre_archivo: datos_cedula}
+    ep   = documentos.get("EPIFITAS", {})
+    bd   = documentos.get("BD_EPIFITAS", {})
 
     # Costo compensación: priorizar doc separado, fallback al AF
     costo_comp_val   = comp.get("costo_compensacion") or af.get("costo_compensacion")
@@ -928,35 +966,53 @@ def analizar_paquete(documentos: dict) -> dict:
     COLUMNAS_DOC = [
         "FUN", "Informe AF", "Inventario", "Plan Comp.", "Aptitud",
         "Costos", "Oficio", "CTL", "CUS", "Poder Forestal", "Cédula (IA)",
+        "Epífitas", "BD Epífitas",
     ]
 
     filas_cotejo = []
     incoherencias = []
 
-    def fila(dato, vals: dict, comparador=_comparar):
-        valores_presentes = {k: v for k, v in vals.items() if v is not None}
-        valores_lista = list(valores_presentes.values())
+    def fila(dato, vals: dict, comparador=_comparar, grupo="General", formato=None):
+        fmt = formato or _fmt
+        valores_presentes = {k: v for k, v in vals.items() if v is not None and str(v).strip() != ""}
 
-        if len(valores_lista) < 2:
+        # Se agrupan los valores equivalentes; el grupo más grande es la
+        # referencia y cada documento queda marcado como coincide / no coincide.
+        grupos: list[list[str]] = []
+        for doc, v in valores_presentes.items():
+            for g in grupos:
+                if comparador(valores_presentes[g[0]], v):
+                    g.append(doc)
+                    break
+            else:
+                grupos.append([doc])
+        grupos.sort(key=len, reverse=True)
+
+        if len(valores_presentes) < 2:
             consistente = "—"
         else:
-            consistente = "✅"
-            ref = valores_lista[0]
-            for v in valores_lista[1:]:
-                if not comparador(ref, v):
-                    consistente = "❌"
-                    break
+            consistente = "✅" if len(grupos) == 1 else "❌"
 
-        fila_dict = {"dato": dato}
+        # Empate entre los grupos más grandes (ej. 2 documentos que no
+        # coinciden): no hay mayoría, así que ninguno se toma como referencia.
+        empate = len(grupos) > 1 and len(grupos[0]) == len(grupos[1])
+        referencia = [] if empate else (grupos[0] if grupos else [])
+        fila_dict = {"dato": dato, "grupo": grupo}
         for col in COLUMNAS_DOC:
-            fila_dict[col] = _fmt(vals.get(col))
+            fila_dict[col] = fmt(vals.get(col))
         fila_dict["✓"] = consistente
+        fila_dict["valor"] = fmt(valores_presentes[referencia[0]]) if referencia else (
+            "No coinciden" if valores_presentes else "—")
+        fila_dict["fuentes"] = {
+            doc: {"valor": fmt(v), "coincide": doc in referencia}
+            for doc, v in valores_presentes.items()
+        }
         filas_cotejo.append(fila_dict)
 
         if consistente == "❌":
             incoherencias.append({
                 "dato": dato,
-                "valores": {k: _fmt(v) for k, v in vals.items() if v is not None}
+                "valores": {k: fmt(v) for k, v in valores_presentes.items()}
             })
 
     # ---- Filas ----
@@ -967,7 +1023,8 @@ def analizar_paquete(documentos: dict) -> dict:
         "Plan Comp.": comp.get("nombre_proyecto"),
         "Aptitud": apt.get("nombre_proyecto"),
         "Oficio": ofi.get("nombre_proyecto"),
-    })
+        "Epífitas": ep.get("nombre_proyecto"),
+    }, grupo="Proyecto y predio")
     fila("Municipio", {
         "FUN": fun.get("municipio"),
         "Informe AF": af.get("municipio"),
@@ -975,13 +1032,15 @@ def analizar_paquete(documentos: dict) -> dict:
         "Oficio": ofi.get("municipio"),
         "CTL": ctl.get("municipio"),
         "CUS": cus.get("municipio"),
-    })
+        "Epífitas": ep.get("municipio"),
+        "BD Epífitas": bd.get("municipio"),
+    }, grupo="Proyecto y predio")
     fila("👤 Propietario del predio", {
         "Informe AF": af.get("propietario"),
         "Inventario": inv.get("propietario"),
         "CTL": ctl.get("propietario"),
         "Poder Forestal": pod.get("propietario"),
-    }, comparador=_comparar_nombres)
+    }, comparador=_comparar_nombres, grupo="Propietario")
     # Una fila POR CADA cédula subida (puede haber más de una en el mismo
     # paquete — ej. la del propietario y la de otra persona/cónyuge — y cada
     # una se compara por separado contra el propietario ya identificado en
@@ -992,7 +1051,7 @@ def analizar_paquete(documentos: dict) -> dict:
             "CTL": ctl.get("propietario"),
             "Poder Forestal": pod.get("propietario"),
             "Cédula (IA)": _formatear_cedula(datos_ced),
-        }, comparador=_comparar_nombres)
+        }, comparador=_comparar_nombres, grupo="Propietario")
         # Verificación adicional por NÚMERO de identificación (más estricta
         # que el nombre) — solo se compara cuando ambos lados realmente
         # tienen un número disponible; si el CTL/Informe AF no lo trae
@@ -1004,64 +1063,112 @@ def analizar_paquete(documentos: dict) -> dict:
                 "CTL": ctl.get("propietario_id"),
                 "Poder Forestal": pod.get("propietario_id"),
                 "Cédula (IA)": cedula_id,
-            }, comparador=_comparar_ids)
+            }, comparador=_comparar_ids, grupo="Propietario")
     fila("🏷️ Matrícula Inmobiliaria", {
         "Informe AF": af.get("matricula"),
         "Aptitud": apt.get("matricula"),
         "CTL": ctl.get("matricula"),
         "CUS": cus.get("matricula"),
         "Poder Forestal": pod.get("matricula"),
-    })
-    fila("Individuos a aprovechar", {
+        "Epífitas": ep.get("matricula"),
+    }, grupo="Proyecto y predio")
+
+    _docs_todos = {
+        "FUN": fun, "Informe AF": af, "Inventario": inv, "Plan Comp.": comp, "Aptitud": apt,
+        "Costos": cos, "Oficio": ofi, "CTL": ctl, "CUS": cus, "Poder Forestal": pod, "Epífitas": ep,
+    }
+    fila("🌍 Bioma", {k: d.get("bioma") for k, d in _docs_todos.items()},
+         comparador=_comparar_contiene, grupo="Proyecto y predio")
+    fila("🌦️ Zona de vida (Holdridge)", {k: d.get("zona_vida") for k, d in _docs_todos.items()},
+         grupo="Proyecto y predio")
+
+    fila("🌳 Árboles inventariados / a aprovechar", {
         "FUN": fun.get("individuos"),
         "Informe AF": af.get("individuos"),
         "Inventario": inv.get("individuos"),
         "Aptitud": apt.get("individuos"),
         "Costos": cos.get("individuos"),
         "Oficio": ofi.get("individuos"),
-    })
+        "Epífitas": ep.get("arboles_influencia"),
+    }, grupo="Aprovechamiento")
     fila("Volumen aprovechamiento (m³)", {
         "FUN": fun.get("volumen_m3"),
         "Informe AF": af.get("volumen_m3"),
         "Inventario": inv.get("volumen_m3"),
         "Costos": cos.get("volumen_m3"),
-    })
+    }, grupo="Aprovechamiento")
     fila("Individuos a reponer", {
         "Informe AF": af.get("individuos_reponer"),
         "Plan Comp.": comp.get("individuos_reponer"),
         "Costos": cos.get("individuos_reponer"),
-    })
+    }, grupo="Aprovechamiento")
     fila("Área a reponer/compensar (ha)", {
         "Plan Comp.": comp.get("area_reponer_ha"),
-    })
+    }, grupo="Aprovechamiento")
     fila("Área del predio (ha)", {
         "FUN": fun.get("area_ha"),
         "Informe AF": af.get("area_ha"),
         "Plan Comp.": comp.get("area_impacto"),
         "Aptitud": apt.get("area_ha"),
-    })
+    }, grupo="Aprovechamiento")
     fila("Potencia del proyecto (kWp)", {
         "Informe AF": af.get("potencia_kwp"),
         "Aptitud": apt.get("potencia_kwp"),
         "Oficio": ofi.get("potencia_kwp"),
-    })
+    }, grupo="Proyecto y predio")
     fila("Empresa distribuidora", {
         "Informe AF": af.get("distribuidora"),
         "Aptitud": apt.get("distribuidora"),
         "Oficio": ofi.get("distribuidora"),
-    })
+    }, grupo="Proyecto y predio")
     fila("💰 Costo aprovechamiento (COP)", {
         "Informe AF": af.get("costo_aprovechamiento"),
         "Costos": cos.get("costo_aprovechamiento"),
-    })
+    }, grupo="Costos")
     fila("💰 Costo compensación (COP)", {
         costo_comp_label: costo_comp_val,
         "Costos": cos.get("costo_compensacion"),
-    })
+    }, grupo="Costos")
     fila("💰 Costo instalación proyecto (COP)", {
         "FUN": fun.get("costo_instalacion"),
         "Costos": cos.get("costo_instalacion"),
-    })
+    }, grupo="Costos")
+
+    fila("🌿 Forófitos con epífitas", {
+        "Epífitas": ep.get("forofitos"), "BD Epífitas": bd.get("forofitos"),
+    }, grupo="Epífitas")
+    fila("Especies de epífitas no vasculares", {
+        "Epífitas": ep.get("spp_enov"), "BD Epífitas": bd.get("spp_enov"),
+    }, grupo="Epífitas")
+    fila("Especies de epífitas vasculares", {
+        "Epífitas": ep.get("spp_ev"), "BD Epífitas": bd.get("spp_ev"),
+    }, grupo="Epífitas")
+    fila("Cobertura total de epífitas (cm²)", {
+        "Epífitas": ep.get("cobertura_cm2"), "BD Epífitas": bd.get("cobertura_cm2"),
+    }, grupo="Epífitas", formato=lambda v: "—" if v is None else f"{int(float(v)):,} cm²".replace(",", "."))
+
+    # ---- Resumen de epífitas: ¿en cuántos árboles se encontraron? ----
+    epifitas = None
+    if ep or bd:
+        if inv.get("individuos"):
+            total, fuente_total = inv.get("individuos"), "Inventario"
+        elif ep.get("arboles_influencia"):
+            total, fuente_total = ep.get("arboles_influencia"), "Informe de epífitas"
+        else:
+            total, fuente_total = af.get("individuos"), "Informe AF"
+        forofitos = ep.get("forofitos") or bd.get("forofitos")
+        epifitas = {
+            "arboles": int(float(total)) if total else None,
+            "fuente_arboles": fuente_total,
+            "forofitos": int(float(forofitos)) if forofitos else None,
+            "fuente_forofitos": "Informe de epífitas" if ep.get("forofitos") else "BD de epífitas",
+            "spp_enov": ep.get("spp_enov") or bd.get("spp_enov"),
+            "spp_ev": ep.get("spp_ev") or bd.get("spp_ev"),
+            "cobertura_cm2": ep.get("cobertura_cm2") or bd.get("cobertura_cm2"),
+            "representatividad_pct": ep.get("representatividad_pct"),
+            "area_intervenir_ha": ep.get("area_intervenir_ha"),
+            "coberturas": ep.get("coberturas") or bd.get("coberturas"),
+        }
 
     # ---- Aritmética ----
     aritmetica = []
@@ -1129,5 +1236,6 @@ def analizar_paquete(documentos: dict) -> dict:
         "cotejo": filas_cotejo,
         "incoherencias": incoherencias,
         "aritmetica": aritmetica,
+        "epifitas": epifitas,
         "datos_crudos": documentos,
     }
