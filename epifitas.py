@@ -188,6 +188,21 @@ def _buscar_col(columnas, *claves, excluir=()):
     return None
 
 
+def prefijo_id(codigo: str) -> str:
+    m = re.match(r"\s*([A-Za-zÁÉÍÓÚÑáéíóúñ]+)", str(codigo))
+    return m.group(1) if m else "(sin prefijo)"
+
+
+def prefijos_arbol_por_defecto(prefijos: dict) -> list:
+    """Por defecto solo cuentan como árboles del inventario los códigos 'P…'
+    cortos (Pl-, PI-, P-); MPC- y similares son otras unidades de muestreo."""
+    return [p for p in prefijos if p.upper().startswith("P") and len(p) <= 2]
+
+
+def contar_forofitos(bd: dict, prefijos_arbol: list) -> int:
+    return sum(1 for i in bd.get("_ids_forofitos", []) if prefijo_id(i) in prefijos_arbol)
+
+
 def leer_bd_epifitas(origen) -> dict:
     """Cuenta forófitos con epífitas, especies y cobertura desde la BD de campo."""
     hojas = pd.read_excel(excel_saneado(origen), sheet_name=None)
@@ -217,8 +232,16 @@ def leer_bd_epifitas(origen) -> dict:
     r = {}
     if c_forofito:
         ids = con_epifita[c_forofito].dropna().astype(str).str.strip()
-        r["forofitos"] = str(ids.nunique())
-        r["_ids_forofitos"] = sorted(ids.unique().tolist())
+        ids = ids[~ids.str.lower().str.startswith("terrestre")]
+        unicos = sorted(ids.unique().tolist())
+        r["_ids_forofitos"] = unicos
+        # Conteo por prefijo del código (Pl-, PI-, MPC-…): no todos son
+        # árboles del inventario forestal, eso lo decide quien revisa.
+        prefijos = {}
+        for i in unicos:
+            prefijos.setdefault(prefijo_id(i), []).append(i)
+        r["_prefijos"] = {k: len(v) for k, v in prefijos.items()}
+        r["forofitos"] = str(contar_forofitos(r, prefijos_arbol_por_defecto(r["_prefijos"])))
     if c_especie:
         esp = con_epifita[[c_especie] + ([c_tipo] if c_tipo else [])].dropna(subset=[c_especie])
         if c_tipo:
