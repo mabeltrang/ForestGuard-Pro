@@ -181,6 +181,101 @@ def _ultimo_bloque_anotacion(texto: str) -> Optional[str]:
     return texto[bloques[-1].start():]
 
 
+# Línea "DE: <nombre> [CC#/NIT# <número>] [X]" de una anotación SNR.
+_PATRON_DE_ANOTACION = re.compile(
+    r"^\s*DE:\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ \.,]{2,120}?)"
+    r"(?:\s+(CC|NIT|C\.?E\.?)#\s*(\d+))?\s*X?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+# Igual que _PATRON_TITULAR_ANOTACION pero captura también la cuota que el
+# SNR escribe después de la X en adjudicaciones/sucesiones ("X 1/7 PARTE").
+_PATRON_A_CON_CUOTA = re.compile(
+    r"^\s*A:\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ \.]{2,80}?)\s+"
+    r"(?:(CC|NIT|C\.?E\.?)#\s*(\d+)\s*)?X\b[ \t]*(?:(\d+)\s*/\s*(\d+)\s*PARTES?)?",
+    re.IGNORECASE | re.MULTILINE,
+)
+_PATRON_ESPECIFICACION = re.compile(r"ESPECIFICACION:\s*([^\n]+)", re.IGNORECASE)
+_PATRON_PORCENTAJE = re.compile(r"(\d{1,3}(?:[.,]\d+)?)\s*%")
+
+
+def _misma_persona(a: dict, b: dict) -> bool:
+    """Misma persona por número de identificación (si ambos lo tienen) o,
+    si falta, por nombre — tolera que una anotación vieja omita un nombre
+    (ej. 'PABA CAMARGO ARTURO' vs. 'PABA CAMARGO FELIX ARTURO')."""
+    na, nb = a.get("numero_id") or "", b.get("numero_id") or ""
+    if na and nb:
+        return na == nb
+    ta = set(_normalizar_texto(a.get("nombre", "")).split())
+    tb = set(_normalizar_texto(b.get("nombre", "")).split())
+    if ta and tb and (ta <= tb or tb <= ta) and len(ta & tb) >= 2:
+        return True
+    return _similitud(a.get("nombre", ""), b.get("nombre", "")) >= 0.88
+
+
+def _es_acto_de_dominio(especificacion: str) -> bool:
+    """Anotaciones que cambian quién es dueño. Se descartan gravámenes
+    (hipotecas), cancelaciones, embargos y demás medidas, que también traen
+    'A: ... X' o 'DE: ... X' pero no transfieren el dominio."""
+    e = _normalizar_texto(especificacion)
+    if any(k in e for k in ("GRAVAMEN", "CANCELACION", "MEDIDA CAUTELAR", "EMBARGO")):
+        return False
+    return "MODO DE ADQUISICION" in e or "CUOTA" in e or "FALSA TRADICION" in e
+
+
+def extraer_titulares_vigentes_ctl(texto: str) -> list:
+    """
+    Recorre TODAS las anotaciones del CTL (formato SNR) en orden y reconstruye
+    quiénes son los titulares vigentes hoy:
+      - En cada acto de dominio, quien aparece en 'DE:' sale y quienes
+        aparecen en 'A: ... X' entran (con su cuota, si el SNR la indica).
+      - En una venta de DERECHOS DE CUOTA, el vendedor solo sale si vendió
+        toda su cuota; si vendió una parte, se queda con el resto.
+    Así se capturan todos los copropietarios aunque la última anotación sea
+    solo la venta de la cuota de uno de ellos (antes se tomaba únicamente
+    el último bloque y se perdían los demás).
+    Retorna [{"nombre","tipo_id","numero_id","cuota"}, ...] (cuota en
+    fracción 0-1 o None si no se pudo determinar).
+    """
+    marcas = list(_PATRON_BLOQUE_ANOTACION.finditer(texto))
+    if not marcas:
+        return []
+    fin = re.search(r"NRO\s+TOTAL\s+DE\s+ANOTACIONES", texto, re.IGNORECASE)
+    limite = fin.start() if fin else len(texto)
+    vigentes: list = []
+    for i, m in enumerate(marcas):
+        bloque = texto[m.start(): marcas[i + 1].start() if i + 1 < len(marcas) else limite]
+        esp = _PATRON_ESPECIFICACION.search(bloque)
+        if not esp or not _es_acto_de_dominio(esp.group(1)):
+            continue
+        receptores = []
+        for a in _PATRON_A_CON_CUOTA.finditer(bloque):
+            nombre = a.group(1).strip(" ,.")
+            cuota = (int(a.group(4)) / int(a.group(5))) if a.group(4) and a.group(5) and int(a.group(5)) else None
+            receptores.append({"nombre": nombre, "tipo_id": (a.group(2) or "").replace(".", "").upper(),
+                               "numero_id": a.group(3) or "", "cuota": cuota})
+        if not receptores:
+            continue
+        cedentes = [{"nombre": d.group(1).strip(" ,."), "numero_id": d.group(3) or ""}
+                    for d in _PATRON_DE_ANOTACION.finditer(bloque)]
+        es_cuota = "CUOTA" in _normalizar_texto(bloque)
+        pct = _PATRON_PORCENTAJE.search(bloque)
+        vendido = float(pct.group(1).replace(",", ".")) / 100 if (es_cuota and pct) else None
+        for c in cedentes:
+            for v in list(vigentes):
+                if not _misma_persona(c, v):
+                    continue
+                if es_cuota and v.get("cuota") and vendido is not None and vendido < v["cuota"] - 0.005:
+                    v["cuota"] = round(v["cuota"] - vendido, 6)   # vendió solo parte
+                else:
+                    vigentes.remove(v)
+        for r in receptores:
+            if r["cuota"] is None and es_cuota and vendido is not None:
+                r["cuota"] = vendido
+            if not any(_misma_persona(r, v) for v in vigentes):
+                vigentes.append(r)
+    return vigentes
+
+
 def extraer_titulares_ctl(texto: str) -> list:
     """
     Retorna [{"nombre","tipo_id","numero_id"}, ...] de los titulares de
@@ -209,7 +304,15 @@ def extraer_titulares_ctl(texto: str) -> list:
         # documento) para capturar a TODOS los titulares vigentes cuando el
         # acto final reparte el dominio entre varias personas a la vez
         # (copropiedad/herencia), en vez de quedarse solo con el último "A:".
-        bloque = _ultimo_bloque_anotacion(texto)
+        # Primero se reconstruye la cadena completa de anotaciones (captura
+        # copropietarios aunque la última anotación sea la venta de una
+        # sola cuota); si no se logra, se usa el bloque de la última.
+        for t in extraer_titulares_vigentes_ctl(texto):
+            clave = (t["nombre"].upper(), t["numero_id"])
+            if clave not in vistos:
+                vistos.add(clave)
+                hallazgos.append(t)
+        bloque = _ultimo_bloque_anotacion(texto) if not hallazgos else None
         if bloque:
             for m in _PATRON_TITULAR_ANOTACION.finditer(bloque):
                 nombre = m.group(1).strip(" ,.")
