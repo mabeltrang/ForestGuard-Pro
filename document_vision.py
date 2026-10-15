@@ -130,14 +130,17 @@ anotaciones (compraventas, embargos, hipotecas, cancelaciones).
 
 Identifica:
 1. El número de matrícula inmobiliaria (formato tipo "347-3480").
-2. El nombre completo del TITULAR VIGENTE actual del derecho real de dominio \
-— es decir, quien queda como dueño según la anotación MÁS RECIENTE que \
-confirma titularidad (columna "A:" marcada como titular), NO un dueño \
-anterior que ya vendió o fue reemplazado en una anotación posterior.
+2. TODOS los TITULARES VIGENTES del derecho real de dominio. Recorre las \
+anotaciones en orden: en cada compraventa, adjudicación, donación o venta \
+de derechos de cuota, quien aparece en "DE:" deja de ser dueño (salvo que \
+venda solo parte de su cuota) y quienes aparecen en "A:" con X pasan a \
+serlo. Ignora hipotecas, cancelaciones y embargos. Si hay copropietarios \
+(sucesión, cuotas), incluye a todos, no solo a los de la última anotación.
 3. El municipio donde está ubicado el predio.
 
 Responde SOLO con JSON sin backticks: {"matricula": "string o null", \
-"propietario": "string o null", "municipio": "string o null"}"""
+"titulares": [{"nombre": "string", "numero_id": "string o null"}], \
+"municipio": "string o null"}"""
 
 _PROMPT_CUS = """Estás viendo un Certificado de Uso del Suelo (Colombia), \
 emitido por una Secretaría de Planeación municipal.
@@ -154,12 +157,13 @@ propietario de un predio autoriza a un tercero a tramitar un aprovechamiento \
 forestal ante la autoridad ambiental).
 
 Identifica:
-1. El nombre completo del propietario/poderdante (quien OTORGA el poder, \
-normalmente mencionado al inicio: "Yo, NOMBRE, identificado con...").
+1. Los nombres completos de TODOS los propietarios/poderdantes (quienes \
+OTORGAN el poder; puede haber varios copropietarios). No incluyas al \
+apoderado ni a la empresa que recibe el poder.
 2. El número de matrícula inmobiliaria del predio, si se menciona.
 
-Responde SOLO con JSON sin backticks: {"propietario": "string o null", \
-"matricula": "string o null"}"""
+Responde SOLO con JSON sin backticks: {"poderdantes": [{"nombre": "string", \
+"numero_id": "string o null"}], "matricula": "string o null"}"""
 
 
 # ---------------------------------------------------------------------------
@@ -169,9 +173,13 @@ Responde SOLO con JSON sin backticks: {"propietario": "string o null", \
 def extraer_ctl_vision(file_bytes: bytes, filename: str) -> dict:
     imagenes = _preparar_imagenes(file_bytes, filename, max_paginas=4)
     r = _llamar_vision_json(imagenes, _PROMPT_CTL)
+    titulares = [{"nombre": t.get("nombre", "").strip(), "tipo_id": "",
+                  "numero_id": re.sub(r"\D", "", str(t.get("numero_id") or ""))}
+                 for t in (r.get("titulares") or []) if isinstance(t, dict) and t.get("nombre")]
     return {
         "matricula": r.get("matricula"),
-        "propietario": r.get("propietario"),
+        "titulares": titulares,
+        "propietario": ", ".join(t["nombre"] for t in titulares) or r.get("propietario"),
         "municipio": r.get("municipio"),
     }
 
@@ -188,7 +196,11 @@ def extraer_cus_vision(file_bytes: bytes, filename: str) -> dict:
 def extraer_poder_vision(file_bytes: bytes, filename: str) -> dict:
     imagenes = _preparar_imagenes(file_bytes, filename, max_paginas=3)
     r = _llamar_vision_json(imagenes, _PROMPT_PODER)
+    poderdantes = [{"nombre": p.get("nombre", "").strip(), "tipo_id": "",
+                    "numero_id": re.sub(r"\D", "", str(p.get("numero_id") or ""))}
+                   for p in (r.get("poderdantes") or []) if isinstance(p, dict) and p.get("nombre")]
     return {
-        "propietario": r.get("propietario"),
+        "personas": poderdantes,
+        "propietario": ", ".join(p["nombre"] for p in poderdantes) or r.get("propietario"),
         "matricula": r.get("matricula"),
     }
