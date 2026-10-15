@@ -67,6 +67,11 @@ _CSS = f"""
             overflow-wrap:anywhere; }}
 .fg-card.bad .fg-valor {{ color:{ROJO}; }}
 .fg-valor.largo {{ font-size:.98rem; }}
+.fg-lista {{ margin:0; padding-left:1.4rem; font-size:.86rem; font-weight:600; line-height:1.4;
+            color:{MORADO_OSCURO}; }}
+.fg-card.bad .fg-lista {{ color:{ROJO}; }}
+.fg-lista-tit {{ font-size:.8rem; font-weight:700; color:{GRIS}; margin-bottom:2px; }}
+.fg-card .fg-dif .fg-lista {{ font-size:.8rem; color:#2B2B3A; }}
 .fg-chips {{ display:flex; flex-wrap:wrap; gap:5px; }}
 .fg-chip {{ font-size:.72rem; font-weight:700; letter-spacing:.02em; padding:3px 8px; border-radius:6px;
            cursor:help; border:1px solid transparent; }}
@@ -115,6 +120,32 @@ def _chip(col: str, valor: str, clase: str) -> str:
     return f'<span class="fg-chip {clase}" title="{_e(nombre)}: {_e(valor)}">{_e(abrev)}</span>'
 
 
+def _nombre_bonito(n: str) -> str:
+    """'PABA RUBIO LUZ MARINA' -> 'Paba Rubio Luz Marina' (solo si viene todo en mayúsculas)."""
+    n = n.strip()
+    return n.title() if n.isupper() else n
+
+
+def _valor_html(valor, grupo: str) -> str | None:
+    """Para filas de personas con varios nombres separados por coma
+    (copropietarios del CTL/Poder), devuelve una lista <ul> en vez de un
+    bloque de texto corrido. Si no aplica, retorna None."""
+    if grupo != "Propietario" or not isinstance(valor, str) or "," not in valor:
+        return None
+    titulo, cuerpo = "", valor
+    m = re.match(r"^\s*(Faltan|Sin cuota[^:]*|[^:,]{0,40}\(¿ya no es dueño\?\)):\s*(.+)$", valor)
+    if m:
+        titulo, cuerpo = m.group(1), m.group(2)
+    elif "·" in valor:  # filas tipo "114.29 % · sobra: ..." — no son listas de nombres
+        return None
+    nombres = [x for x in re.split(r",\s*(?:y\s+)?", cuerpo) if x.strip()]
+    if len(nombres) < 2:
+        return None
+    items = "".join(f"<li>{_e(_nombre_bonito(n))}</li>" for n in nombres)
+    tit = f'<div class="fg-lista-tit">{_e(titulo)} ({len(nombres)})</div>' if titulo else ""
+    return f'{tit}<ol class="fg-lista">{items}</ol>'
+
+
 def _tarjeta(f: dict) -> str:
     fuentes = f.get("fuentes") or {}
     estado = {"✅": "ok", "❌": "bad"}.get(f["✓"], "solo")
@@ -129,7 +160,8 @@ def _tarjeta(f: dict) -> str:
     dif = ""
     if estado == "bad":
         lineas = "".join(
-            f'<div>{_chip(col, d["valor"], "ok" if d["coincide"] else "bad")}<span>{_e(d["valor"])}</span></div>'
+            f'<div>{_chip(col, d["valor"], "ok" if d["coincide"] else "bad")}'
+            f'<span>{_valor_html(d["valor"], f.get("grupo", "")) or _e(d["valor"])}</span></div>'
             for col, d in sorted(fuentes.items(), key=lambda kv: not kv[1]["coincide"])
         )
         dif = f'<div class="fg-dif">{lineas}</div>'
@@ -140,7 +172,8 @@ def _tarjeta(f: dict) -> str:
     return (
         f'<div class="fg-card {estado}"><div class="fg-cab"><span class="fg-dato">{_e(_limpiar_dato(f["dato"]))}</span>'
         f'<span class="fg-estado">{etiqueta}</span></div>'
-        f'<div class="{clase_valor}">{_e(valor)}</div>'
+        + (f'<div>{_valor_html(valor, f.get("grupo", ""))}</div>' if _valor_html(valor, f.get("grupo", ""))
+           else f'<div class="{clase_valor}">{_e(valor)}</div>')
         + (f'<div class="fg-chips">{chips}</div>' if chips else "") + f'{dif}</div>'
     )
 
