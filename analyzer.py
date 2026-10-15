@@ -1088,10 +1088,13 @@ def analizar_paquete(documentos: dict) -> dict:
             pod["poderdantes"] = poderdantes
             pod["apoderados"] = [p for p in personas_poder if p not in poderdantes]
 
+    # El CTL va primero: es la referencia contra la que se compara cada
+    # documento (el AF puede nombrar a un titular y el Poder a otros, y
+    # ambos están bien si cada uno coincide con alguien del CTL).
     fila("👤 Propietario del predio", {
+        "CTL": ctl.get("propietario"),
         "Informe AF": af.get("propietario"),
         "Inventario": inv.get("propietario"),
-        "CTL": ctl.get("propietario"),
         "Poder Forestal": pod.get("propietario"),
     }, comparador=_comparar_propietarios, grupo="Propietario")
 
@@ -1115,7 +1118,8 @@ def analizar_paquete(documentos: dict) -> dict:
         fila_dict["CTL"] = valor_ctl
         fila_dict["Poder Forestal"] = valor_pod
         fila_dict["✓"] = "✅" if ok else "❌"
-        fila_dict["valor"] = valor_ctl
+        fila_dict["valor"] = (f"Todos ({len(titulares_ctl)} de {len(titulares_ctl)})" if ok
+                              else f"Faltan {len(faltan)} de {len(titulares_ctl)}")
         fila_dict["fuentes"] = {
             "CTL": {"valor": valor_ctl, "coincide": True},
             "Poder Forestal": {"valor": valor_pod, "coincide": ok},
