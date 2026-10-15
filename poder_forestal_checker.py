@@ -75,6 +75,8 @@ def extraer_propietario_poder(texto: str) -> list:
     for m in _PATRON_PROPIETARIO_PODER.finditer(texto_plano):
         nombre_raw, tipo_id, numero_id = m.groups()
         nombre = _PREFIJOS_TRATAMIENTO.sub("", nombre_raw).strip(" ,.")
+        # Varios poderdantes en una frase: "..., y JOSE ANGEL PABA ..."
+        nombre = re.sub(r"^(?:y|e)\s+", "", nombre, flags=re.IGNORECASE).strip(" ,.")
         clave = (nombre.upper(), numero_id)
         if clave in vistos or not nombre:
             continue
