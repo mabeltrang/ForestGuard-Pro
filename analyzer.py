@@ -507,10 +507,11 @@ def extraer_ctl(texto: str) -> dict:
     """CTL — Certificado de Tradición y Libertad de Matrícula Inmobiliaria."""
     r = {}
     r["matricula"] = _primera_matricula(extraer_matriculas(texto))
-    # Máximo 2 titulares (copropiedad real, ej. cónyuges) — evita que un
-    # posible falso positivo del patrón de respaldo (prosa) infle la lista.
-    titulares_ctl = extraer_titulares_ctl(texto)[:2]
-    r["propietario"] = _formatear_propietarios(titulares_ctl)
+    # TODOS los titulares vigentes (copropiedad, sucesiones, ventas de
+    # cuota): el Poder debe estar firmado por cada uno de ellos.
+    titulares_ctl = extraer_titulares_ctl(texto)
+    r["titulares"] = titulares_ctl
+    r["propietario"] = _formatear_propietarios(titulares_ctl, max_nombres=50)
     # Número de identificación del titular — OPCIONAL: muchos CTL de predios
     # rurales antiguos no lo incluyen en la anotación (solo nombre + "X"),
     # en ese caso queda en None y la fila de cotejo simplemente no compara
@@ -549,6 +550,9 @@ def extraer_poder(texto: str) -> dict:
     # Las demás personas identificadas en el poder (apoderado y, a veces,
     # el representante de Unergy): sirven para cotejar la cédula del apoderado.
     r["apoderados"] = todos[1:]
+    # Todas las personas identificadas: en analizar_paquete se separan en
+    # poderdantes (las que son titulares del CTL) y apoderados (el resto).
+    r["personas"] = todos
     r["matricula"] = _primera_matricula(extraer_matriculas(texto))
     return r
 
@@ -927,6 +931,27 @@ def _comparar_nombres(val_a, val_b) -> bool:
     return tokens_a == tokens_b or tokens_a <= tokens_b or tokens_b <= tokens_a
 
 
+def _comparar_propietarios(val_a, val_b) -> bool:
+    """Como _comparar_nombres, pero cada lado puede ser una lista de nombres
+    separados por coma (copropietarios del CTL/Poder). Coinciden si al menos
+    una persona de un lado está en el otro: al Informe AF y al Inventario
+    les basta con nombrar a uno de los titulares."""
+    if val_a is None or val_b is None:
+        return True
+    la = [x for x in str(val_a).split(",") if x.strip()]
+    lb = [x for x in str(val_b).split(",") if x.strip()]
+    return any(_comparar_nombres(x, y) for x in la for y in lb)
+
+
+def _misma_persona_doc(a: dict, b: dict) -> bool:
+    """Misma persona por número de ID (si ambos lo traen) o por nombre."""
+    ia = re.sub(r"\D", "", str(a.get("numero_id") or ""))
+    ib = re.sub(r"\D", "", str(b.get("numero_id") or ""))
+    if ia and ib:
+        return ia == ib
+    return bool(a.get("nombre") and b.get("nombre")) and _comparar_nombres(a["nombre"], b["nombre"])
+
+
 def _limpiar_municipio(v):
     """'San Pedro Vereda' / 'Gamarra, Cesar' -> 'San Pedro' / 'Gamarra'."""
     if not v:
@@ -1051,12 +1076,86 @@ def analizar_paquete(documentos: dict) -> dict:
         "Epífitas": ep.get("municipio"),
         "BD Epífitas": bd.get("municipio"),
     }.items()}, grupo="Proyecto y predio")
+    # ---- Copropietarios: Poder vs. CTL ----
+    titulares_ctl = ctl.get("titulares") or []
+    personas_poder = pod.get("personas") or []
+    if titulares_ctl and personas_poder:
+        poderdantes = [p for p in personas_poder if any(_misma_persona_doc(p, t) for t in titulares_ctl)]
+        if poderdantes:
+            pod = dict(pod)
+            pod["propietario"] = _formatear_propietarios(poderdantes, max_nombres=50)
+            pod["propietario_id"] = poderdantes[0].get("numero_id")
+            pod["poderdantes"] = poderdantes
+            pod["apoderados"] = [p for p in personas_poder if p not in poderdantes]
+
     fila("👤 Propietario del predio", {
         "Informe AF": af.get("propietario"),
         "Inventario": inv.get("propietario"),
         "CTL": ctl.get("propietario"),
         "Poder Forestal": pod.get("propietario"),
-    }, comparador=_comparar_nombres, grupo="Propietario")
+    }, comparador=_comparar_propietarios, grupo="Propietario")
+
+    # El Poder debe incluir a TODOS los titulares vigentes del CTL (el
+    # Informe AF y el Inventario pueden nombrar solo a uno).
+    if len(titulares_ctl) > 1 and (personas_poder or pod.get("propietario")):
+        if personas_poder:
+            faltan = [t for t in titulares_ctl
+                      if not any(_misma_persona_doc(p, t) for p in personas_poder)]
+        else:  # Poder leído por visión: solo hay nombres en texto
+            nombres_pod = [x for x in str(pod.get("propietario")).split(",") if x.strip()]
+            faltan = [t for t in titulares_ctl
+                      if not any(_comparar_nombres(t["nombre"], n) for n in nombres_pod)]
+        dato = f"👥 Poder firmado por todos los titulares del CTL ({len(titulares_ctl)})"
+        ok = not faltan
+        valor_pod = "Todos incluidos" if ok else "Faltan: " + ", ".join(t["nombre"] for t in faltan)
+        valor_ctl = ", ".join(t["nombre"] for t in titulares_ctl)
+        fila_dict = {"dato": dato, "grupo": "Propietario"}
+        for col in COLUMNAS_DOC:
+            fila_dict[col] = "—"
+        fila_dict["CTL"] = valor_ctl
+        fila_dict["Poder Forestal"] = valor_pod
+        fila_dict["✓"] = "✅" if ok else "❌"
+        fila_dict["valor"] = valor_ctl
+        fila_dict["fuentes"] = {
+            "CTL": {"valor": valor_ctl, "coincide": True},
+            "Poder Forestal": {"valor": valor_pod, "coincide": ok},
+        }
+        filas_cotejo.append(fila_dict)
+        if not ok:
+            incoherencias.append({"dato": dato, "valores": {"CTL": valor_ctl, "Poder Forestal": valor_pod}})
+
+    # Las cuotas de los titulares vigentes deben sumar 100 %. Si sobra, es
+    # señal de un dueño anterior que no se descontó ("fantasma"); si falta,
+    # de un titular que no se leyó. Un titular sin cuota entre otros que sí
+    # la tienen también se marca: suele ser alguien que ya no está.
+    if len(titulares_ctl) > 1:
+        con_cuota = [t for t in titulares_ctl if t.get("cuota")]
+        sin_cuota = [t for t in titulares_ctl if not t.get("cuota")]
+        dato = "🧮 Suma de cuotas de los titulares (CTL)"
+        if not con_cuota:
+            valor, estado = "El CTL no indica cuotas — revisar a mano", "—"
+        else:
+            suma = sum(t["cuota"] for t in con_cuota)
+            valor = f"{suma * 100:.2f} %"
+            ok = abs(suma - 1) <= 0.01 and not sin_cuota
+            if sin_cuota:
+                valor += " · sin cuota (¿ya no es dueño?): " + ", ".join(t["nombre"] for t in sin_cuota)
+            elif suma > 1.01:
+                valor += " · sobra: puede haber un dueño anterior que no se descontó"
+            elif suma < 0.99:
+                valor += " · falta: puede haber un titular que no se leyó"
+            estado = "✅" if ok else "❌"
+        fila_dict = {"dato": dato, "grupo": "Propietario"}
+        for col in COLUMNAS_DOC:
+            fila_dict[col] = "—"
+        fila_dict["CTL"] = valor
+        fila_dict["✓"] = estado
+        fila_dict["valor"] = valor
+        fila_dict["fuentes"] = {"CTL": {"valor": valor, "coincide": estado != "❌"}}
+        filas_cotejo.append(fila_dict)
+        if estado == "❌":
+            incoherencias.append({"dato": dato, "valores": {"CTL": valor}})
+
     # Una fila POR CADA cédula subida (puede haber más de una en el mismo
     # paquete — ej. la del propietario y la de otra persona/cónyuge — y cada
     # una se compara por separado contra el propietario ya identificado en
@@ -1067,17 +1166,24 @@ def analizar_paquete(documentos: dict) -> dict:
             "CTL": ctl.get("propietario"),
             "Poder Forestal": pod.get("propietario"),
             "Cédula (IA)": _formatear_cedula(datos_ced),
-        }, comparador=_comparar_nombres, grupo="Propietario")
+        }, comparador=_comparar_propietarios, grupo="Propietario")
         # Verificación adicional por NÚMERO de identificación (más estricta
         # que el nombre) — solo se compara cuando ambos lados realmente
         # tienen un número disponible; si el CTL/Informe AF no lo trae
         # (frecuente en CTL de predios rurales antiguos), la fila queda "—".
         cedula_id = (datos_ced or {}).get("numero_identificacion")
-        if cedula_id or af.get("propietario_id") or ctl.get("propietario_id") or pod.get("propietario_id"):
+        # Con varios titulares, se compara contra el titular que corresponde
+        # a esta cédula (no siempre contra el primero de la lista).
+        _ced = {"nombre": _formatear_cedula(datos_ced), "numero_id": cedula_id}
+        _t_ctl = next((t for t in titulares_ctl if _misma_persona_doc(t, _ced)), None)
+        _t_pod = next((p for p in (pod.get("poderdantes") or []) if _misma_persona_doc(p, _ced)), None)
+        ctl_id_ced = (_t_ctl or {}).get("numero_id") or ctl.get("propietario_id")
+        pod_id_ced = (_t_pod or {}).get("numero_id") or pod.get("propietario_id")
+        if cedula_id or af.get("propietario_id") or ctl_id_ced or pod_id_ced:
             fila(f"🪪 Cédula del propietario — {nombre_archivo} (No. identificación)", {
-                "Informe AF": af.get("propietario_id"),
-                "CTL": ctl.get("propietario_id"),
-                "Poder Forestal": pod.get("propietario_id"),
+                "Informe AF": af.get("propietario_id") if _comparar_propietarios(af.get("propietario"), _ced["nombre"]) else None,
+                "CTL": ctl_id_ced,
+                "Poder Forestal": pod_id_ced,
                 "Cédula (IA)": cedula_id,
             }, comparador=_comparar_ids, grupo="Propietario")
     # Cédula del APODERADO: se coteja contra las demás personas del Poder
