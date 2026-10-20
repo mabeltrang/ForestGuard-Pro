@@ -283,6 +283,7 @@ TIPOS_INFO = {
     "CEDULA_APODERADO": ("CA", "Cédula del apoderado"),
     "EPIFITAS": ("EP", "Caracterización de epífitas"),
     "BD_EPIFITAS": ("BD", "Base de datos de epífitas"),
+    "RESOLUCION": ("RES", "Resolución de la autoridad"),
     "DESCONOCIDO": ("—", "Otro documento (no se coteja)"),
 }
 
