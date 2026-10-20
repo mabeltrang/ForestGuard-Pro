@@ -853,6 +853,15 @@ def clasificar_documento(nombre_archivo: str, texto: str) -> str:
         # mencionarlas más adelante, pero no en su portada)
         return "EPIFITAS"
 
+    # Resolución de la autoridad ambiental (acto administrativo que resuelve
+    # la solicitud). Se detecta antes del puntaje general porque transcribe
+    # datos del CTL, el inventario y la compensación y si no se confundiría
+    # con cualquiera de ellos.
+    texto_completo = _normalizar(texto)
+    if (("resoluci" in nombre or re.search(r"resoluci[oó]n", texto_n[:1500]))
+            and "resuelve" in texto_completo and "aprovechamiento forestal" in texto_completo):
+        return "RESOLUCION"
+
     puntajes = {tipo: 0 for tipo in TIPOS}
 
     for tipo, palabras_clave in TIPOS.items():
