@@ -15,6 +15,7 @@ from document_vision import extraer_ctl_vision, extraer_cus_vision, extraer_pode
 from oficio_checklist import verificar_checklist_oficio
 from analyzer import extraer_epifitas
 from epifitas import extraer_comunes, leer_bd_epifitas, prefijos_arbol_por_defecto, contar_forofitos
+from ui_resolucion import mostrar_revision_resolucion
 from ui_cotejo import (mostrar_resumen, mostrar_tarjetas, mostrar_epifitas, mostrar_checklist,
                        css_documentos, cabecera_documento, etiqueta_tipo)
 import io
@@ -66,6 +67,7 @@ LABELS = {
     "CEDULA_APODERADO": "🪪 Cédula apoderado (IA)",
     "EPIFITAS": "🌿 Informe de epífitas",
     "BD_EPIFITAS": "📊 BD de epífitas",
+    "RESOLUCION": "📑 Resolución",
     "DESCONOCIDO": "❓ Desconocido",
 }
 
@@ -191,6 +193,8 @@ with st.sidebar:
     - Poder Forestal
     - Cédula/documento de identidad del propietario *(foto o PDF escaneado)*
     - Informe de caracterización de epífitas y su base de datos en Excel
+    - Resolución de la autoridad *(se revisa aparte: días desde el radicado,
+      comisión del tramitador, compensación y errores del acto)*
 
     *(PDF, DOCX, XLSX, JPG, PNG)*
 
@@ -296,7 +300,7 @@ if uploaded_files:
                    ", ".join(f"{n} ({t:.0f} s)" for n, t in sorted(lentos, key=lambda x: -x[1])))
 
     # Clasificación con corrección manual
-    tipo_opciones = ["FUN", "INFORME_AF", "INVENTARIO", "COMPENSACION", "APTITUD", "COSTOS", "OFICIO", "CTL", "CUS", "PODER", "CEDULA", "CEDULA_APODERADO", "EPIFITAS", "BD_EPIFITAS", "DESCONOCIDO"]
+    tipo_opciones = ["FUN", "INFORME_AF", "INVENTARIO", "COMPENSACION", "APTITUD", "COSTOS", "OFICIO", "CTL", "CUS", "PODER", "CEDULA", "CEDULA_APODERADO", "EPIFITAS", "BD_EPIFITAS", "RESOLUCION", "DESCONOCIDO"]
     asignaciones = {}
 
     ESTADO_VIGENCIA_LABEL = {
@@ -419,6 +423,16 @@ if uploaded_files:
                     if tmp_path and os.path.exists(tmp_path):
                         os.remove(tmp_path)
             documentos_datos[tipo] = datos
+
+    # ---------------------------------------------------------------------------
+    # RESOLUCIONES: no hacen parte del paquete, se revisan por separado
+    # ---------------------------------------------------------------------------
+    resoluciones = [n for n, t in asignaciones.items() if t == "RESOLUCION"]
+    for nombre in resoluciones:
+        st.markdown("---")
+        mostrar_revision_resolucion(buffers[nombre].getvalue(), nombre)
+    if resoluciones and len(resoluciones) == len(asignaciones):
+        st.stop()
 
     # ---------------------------------------------------------------------------
     # CHECKLIST SEGÚN EL OFICIO: ¿falta algún documento que el Oficio dice anexar?
