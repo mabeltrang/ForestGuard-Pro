@@ -81,7 +81,7 @@ def _obtener_api_key() -> Optional[str]:
         return None
 
 
-def _llamar_vision_json(imagenes: list, prompt: str, max_tokens: int = 700) -> dict:
+def _llamar_vision_json(imagenes: list, prompt: str, max_tokens: int = 700, timeout: int = 45) -> dict:
     import urllib.request
 
     api_key = _obtener_api_key()
@@ -111,7 +111,7 @@ def _llamar_vision_json(imagenes: list, prompt: str, max_tokens: int = 700) -> d
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=45) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
             texto = data["content"][0]["text"].strip()
             texto = re.sub(r"```json|```", "", texto).strip()
