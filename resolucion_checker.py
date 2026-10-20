@@ -33,11 +33,6 @@ class Severidad(str, Enum):
     INFO = "info"
 
 
-class ModoDias(str, Enum):
-    CALENDARIO = "calendario"
-    HABILES = "hábiles"
-
-
 @dataclass(frozen=True)
 class TramoComision:
     dias_min: int
