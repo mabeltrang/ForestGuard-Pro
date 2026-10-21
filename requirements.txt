@@ -8,3 +8,4 @@ Pillow
 numpy
 pymupdf
 scipy
+anthropic
